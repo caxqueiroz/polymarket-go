@@ -23,8 +23,8 @@ type ClobMarket struct {
 	NegRiskMarketID          string    `json:"neg_risk_market_id"`
 	NegRiskRequestID         string    `json:"neg_risk_request_id"`
 	NotificationsEnabled     bool      `json:"notifications_enabled"`
-	MinimumOrderSize         string    `json:"minimum_order_size"`
-	MinimumTickSize          string    `json:"minimum_tick_size"`
+	MinimumOrderSize         FlexString `json:"minimum_order_size"`
+	MinimumTickSize          FlexString `json:"minimum_tick_size"`
 	MakerBaseFee             float64   `json:"maker_base_fee"`
 	TakerBaseFee             float64   `json:"taker_base_fee"`
 	SecondsDelay             int       `json:"seconds_delay"`
@@ -43,8 +43,8 @@ type Token struct {
 
 // Rewards holds reward configuration for a market.
 type Rewards struct {
-	MinSize   string          `json:"min_size"`
-	MaxSpread string          `json:"max_spread"`
+	MinSize   FlexString      `json:"min_size"`
+	MaxSpread FlexString      `json:"max_spread"`
 	Rates     []RewardRate    `json:"rates"`
 }
 
