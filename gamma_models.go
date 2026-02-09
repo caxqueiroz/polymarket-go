@@ -2,6 +2,7 @@ package polymarket
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -22,25 +23,25 @@ type GammaMarket struct {
 	Archived           bool        `json:"archived"`
 	Featured           bool        `json:"featured"`
 	Restricted         bool        `json:"restricted"`
-	Liquidity          float64     `json:"liquidity"`
-	Volume             float64     `json:"volume"`
-	Volume24hr         float64     `json:"volume24hr"`
-	OpenInterest       float64     `json:"openInterest"`
+	Liquidity          Number      `json:"liquidity"`
+	Volume             Number      `json:"volume"`
+	Volume24hr         Number      `json:"volume24hr"`
+	OpenInterest       Number      `json:"openInterest"`
 	EnableOrderBook    bool        `json:"enableOrderBook"`
-	LiquidityClob      float64     `json:"liquidityClob"`
-	LiquidityAmm       float64     `json:"liquidityAmm"`
+	LiquidityClob      Number      `json:"liquidityClob"`
+	LiquidityAmm       Number      `json:"liquidityAmm"`
 	NegRisk            bool        `json:"negRisk"`
 	NegRiskMarketID    string      `json:"negRiskMarketID"`
-	NegRiskFeeBips     float64     `json:"negRiskFeeBips"`
+	NegRiskFeeBips     Number      `json:"negRiskFeeBips"`
 	CommentCount       int         `json:"commentCount"`
 	ClobTokenIDs       StringSlice `json:"clobTokenIds"`
 	Outcomes           StringSlice `json:"outcomes"`
 	OutcomePrices      StringSlice `json:"outcomePrices"`
-	BestBid            float64     `json:"bestBid"`
-	BestAsk            float64     `json:"bestAsk"`
-	LastTradePrice     float64     `json:"lastTradePrice"`
-	Spread             float64     `json:"spread"`
-	OneDayPriceChange  float64     `json:"oneDayPriceChange"`
+	BestBid            Number      `json:"bestBid"`
+	BestAsk            Number      `json:"bestAsk"`
+	LastTradePrice     Number      `json:"lastTradePrice"`
+	Spread             Number      `json:"spread"`
+	OneDayPriceChange  Number      `json:"oneDayPriceChange"`
 	Category           string      `json:"category"`
 	EventSlug          string      `json:"eventSlug"`
 }
@@ -64,20 +65,20 @@ type GammaEvent struct {
 	Archived         bool          `json:"archived"`
 	Featured         bool          `json:"featured"`
 	Restricted       bool          `json:"restricted"`
-	Liquidity        float64       `json:"liquidity"`
-	Volume           float64       `json:"volume"`
-	OpenInterest     float64       `json:"openInterest"`
+	Liquidity        Number        `json:"liquidity"`
+	Volume           Number        `json:"volume"`
+	OpenInterest     Number        `json:"openInterest"`
 	Category         string        `json:"category"`
 	Subcategory      string        `json:"subcategory"`
 	EnableOrderBook  bool          `json:"enableOrderBook"`
-	LiquidityAmm     float64       `json:"liquidityAmm"`
-	LiquidityClob    float64       `json:"liquidityClob"`
+	LiquidityAmm     Number        `json:"liquidityAmm"`
+	LiquidityClob    Number        `json:"liquidityClob"`
 	NegRisk          bool          `json:"negRisk"`
 	CommentCount     int           `json:"commentCount"`
-	Volume24hr       float64       `json:"volume24hr"`
-	Volume1wk        float64       `json:"volume1wk"`
-	Volume1mo        float64       `json:"volume1mo"`
-	Volume1yr        float64       `json:"volume1yr"`
+	Volume24hr       Number        `json:"volume24hr"`
+	Volume1wk        Number        `json:"volume1wk"`
+	Volume1mo        Number        `json:"volume1mo"`
+	Volume1yr        Number        `json:"volume1yr"`
 	Markets          []GammaMarket `json:"markets"`
 	Tags             []GammaTag    `json:"tags"`
 }
@@ -137,6 +138,45 @@ type GammaEventParams struct {
 	StartDateMax string
 	EndDateMin   string
 	EndDateMax   string
+}
+
+// Number is a float64 that can be unmarshaled from either a JSON number or a
+// JSON string. The Gamma API inconsistently returns numeric fields as either
+// numbers or strings.
+type Number float64
+
+// Float64 returns the Number as a float64.
+func (n Number) Float64() float64 { return float64(n) }
+
+// UnmarshalJSON implements json.Unmarshaler for Number.
+func (n *Number) UnmarshalJSON(data []byte) error {
+	var f float64
+	if err := json.Unmarshal(data, &f); err == nil {
+		*n = Number(f)
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		*n = 0
+		return nil
+	}
+	if s == "" {
+		*n = 0
+		return nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		*n = 0
+		return nil
+	}
+	*n = Number(f)
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for Number.
+func (n Number) MarshalJSON() ([]byte, error) {
+	return json.Marshal(float64(n))
 }
 
 // StringSlice handles Gamma API fields that can be either a JSON array or a JSON

@@ -317,3 +317,63 @@ func TestStringSliceInStruct(t *testing.T) {
 		t.Errorf("Outcomes[0] = %q, want %q", m.Outcomes[0], "Yes")
 	}
 }
+
+func TestNumberUnmarshal(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  float64
+	}{
+		{name: "json number", input: `123.45`, want: 123.45},
+		{name: "json string", input: `"123.45"`, want: 123.45},
+		{name: "json integer", input: `100`, want: 100},
+		{name: "json string integer", input: `"100"`, want: 100},
+		{name: "empty string", input: `""`, want: 0},
+		{name: "null", input: `null`, want: 0},
+		{name: "zero", input: `0`, want: 0},
+		{name: "zero string", input: `"0"`, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var n Number
+			if err := json.Unmarshal([]byte(tt.input), &n); err != nil {
+				t.Fatalf("Unmarshal() error: %v", err)
+			}
+			if float64(n) != tt.want {
+				t.Errorf("got %f, want %f", float64(n), tt.want)
+			}
+		})
+	}
+}
+
+func TestGammaMarketStringNumericFields(t *testing.T) {
+	// Gamma API returns numeric fields as strings
+	input := `{
+		"id": "123",
+		"question": "Will BTC hit 100k?",
+		"liquidity": "50000.50",
+		"volume": "1234567.89",
+		"volume24hr": "45000",
+		"openInterest": "200000",
+		"bestBid": "0.65",
+		"bestAsk": "0.67",
+		"spread": "0.02",
+		"outcomes": "[\"Yes\",\"No\"]",
+		"outcomePrices": "[\"0.65\",\"0.35\"]"
+	}`
+
+	var m GammaMarket
+	if err := json.Unmarshal([]byte(input), &m); err != nil {
+		t.Fatalf("Unmarshal() error: %v", err)
+	}
+	if m.Liquidity != 50000.50 {
+		t.Errorf("Liquidity = %f, want 50000.50", float64(m.Liquidity))
+	}
+	if m.Volume != 1234567.89 {
+		t.Errorf("Volume = %f, want 1234567.89", float64(m.Volume))
+	}
+	if m.BestBid != 0.65 {
+		t.Errorf("BestBid = %f, want 0.65", float64(m.BestBid))
+	}
+}
