@@ -321,6 +321,124 @@ type bookParamEntry struct {
 	Side    string `json:"side,omitempty"`
 }
 
+// GetOrder retrieves a single order by ID. Requires authentication.
+func (c *ClobClient) GetOrder(ctx context.Context, orderID string) (*Order, error) {
+	var o Order
+	if err := c.base.get(ctx, c.baseURL, "/order/"+orderID, nil, &o); err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+// GetOrders returns the authenticated user's orders. Requires authentication.
+func (c *ClobClient) GetOrders(ctx context.Context, p *OrdersParams) ([]OpenOrder, error) {
+	params := url.Values{}
+	if p != nil {
+		if p.Market != nil {
+			params.Set("market", *p.Market)
+		}
+		if p.Asset != nil {
+			params.Set("asset_id", *p.Asset)
+		}
+	}
+
+	body, err := c.base.getRaw(ctx, c.baseURL, "/orders", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var orders []OpenOrder
+	if err := json.Unmarshal(body, &orders); err != nil {
+		return nil, fmt.Errorf("polymarket: decoding orders: %w", err)
+	}
+	return orders, nil
+}
+
+// CancelOrder cancels a single order by ID. Requires authentication.
+func (c *ClobClient) CancelOrder(ctx context.Context, orderID string) error {
+	_, err := c.base.deleteRaw(ctx, c.baseURL, "/order/"+orderID, nil)
+	return err
+}
+
+// CancelOrders cancels multiple orders by ID. Returns the IDs of canceled orders.
+// Requires authentication.
+func (c *ClobClient) CancelOrders(ctx context.Context, orderIDs []string) ([]string, error) {
+	body, err := c.base.deleteRaw(ctx, c.baseURL, "/orders", CancelOrdersPayload{OrderIDs: orderIDs})
+	if err != nil {
+		return nil, err
+	}
+
+	var canceled []string
+	if err := json.Unmarshal(body, &canceled); err != nil {
+		return nil, fmt.Errorf("polymarket: decoding cancel response: %w", err)
+	}
+	return canceled, nil
+}
+
+// CancelAll cancels all open orders. Returns the IDs of canceled orders.
+// Requires authentication.
+func (c *ClobClient) CancelAll(ctx context.Context) ([]string, error) {
+	body, err := c.base.deleteRaw(ctx, c.baseURL, "/cancel-all", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var canceled []string
+	if err := json.Unmarshal(body, &canceled); err != nil {
+		return nil, fmt.Errorf("polymarket: decoding cancel-all response: %w", err)
+	}
+	return canceled, nil
+}
+
+// GetTrades returns the authenticated user's trades. Requires authentication.
+func (c *ClobClient) GetTrades(ctx context.Context, p *ClobTradesParams) ([]UserTrade, error) {
+	params := url.Values{}
+	if p != nil {
+		if p.Market != nil {
+			params.Set("market", *p.Market)
+		}
+		if p.Asset != nil {
+			params.Set("asset_id", *p.Asset)
+		}
+	}
+
+	body, err := c.base.getRaw(ctx, c.baseURL, "/trades", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var trades []UserTrade
+	if err := json.Unmarshal(body, &trades); err != nil {
+		return nil, fmt.Errorf("polymarket: decoding trades: %w", err)
+	}
+	return trades, nil
+}
+
+// GetBalanceAllowance returns the user's balance and allowance. Requires authentication.
+func (c *ClobClient) GetBalanceAllowance(ctx context.Context, p *BalanceParams) (*BalanceAllowance, error) {
+	params := url.Values{}
+	if p != nil {
+		if p.AssetType != nil {
+			params.Set("asset_type", *p.AssetType)
+		}
+	}
+
+	var ba BalanceAllowance
+	if err := c.base.get(ctx, c.baseURL, "/balance-allowance", params, &ba); err != nil {
+		return nil, err
+	}
+	return &ba, nil
+}
+
+// GetNotifications returns the user's notifications. Requires authentication.
+func (c *ClobClient) GetNotifications(ctx context.Context) ([]Notification, error) {
+	var notifications []Notification
+	if err := c.base.get(ctx, c.baseURL, "/notifications", nil, &notifications); err != nil {
+		return nil, err
+	}
+	return notifications, nil
+}
+
 func buildBookParamsPayload(params []BookParams) []bookParamEntry {
 	entries := make([]bookParamEntry, len(params))
 	for i, p := range params {
