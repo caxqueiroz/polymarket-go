@@ -501,3 +501,95 @@ func TestClobGetLastTradesPricesPost(t *testing.T) {
 		t.Errorf("Price = %q, want %q", got[0].Price, "0.55")
 	}
 }
+
+func TestFlexStringUnmarshal(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "json string", input: `"0.01"`, want: "0.01"},
+		{name: "json number float", input: `0.01`, want: "0.01"},
+		{name: "json number int", input: `15`, want: "15"},
+		{name: "json zero", input: `0`, want: "0"},
+		{name: "empty string", input: `""`, want: ""},
+		{name: "null", input: `null`, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s FlexString
+			if err := json.Unmarshal([]byte(tt.input), &s); err != nil {
+				t.Fatalf("Unmarshal() error: %v", err)
+			}
+			if string(s) != tt.want {
+				t.Errorf("got %q, want %q", string(s), tt.want)
+			}
+		})
+	}
+}
+
+func TestClobMarketNumericFields(t *testing.T) {
+	// Real CLOB API returns minimum_order_size and minimum_tick_size as numbers,
+	// and rewards.min_size/max_spread as numbers.
+	input := `{
+		"condition_id": "0xabc",
+		"question": "Test market",
+		"minimum_order_size": 15,
+		"minimum_tick_size": 0.01,
+		"maker_base_fee": 0,
+		"taker_base_fee": 0,
+		"rewards": {
+			"min_size": 0,
+			"max_spread": 0,
+			"rates": null
+		},
+		"tokens": [
+			{"token_id": "tok1", "outcome": "Yes", "price": 0.65, "winner": false}
+		]
+	}`
+
+	var m ClobMarket
+	if err := json.Unmarshal([]byte(input), &m); err != nil {
+		t.Fatalf("Unmarshal() error: %v", err)
+	}
+	if string(m.MinimumOrderSize) != "15" {
+		t.Errorf("MinimumOrderSize = %q, want %q", string(m.MinimumOrderSize), "15")
+	}
+	if string(m.MinimumTickSize) != "0.01" {
+		t.Errorf("MinimumTickSize = %q, want %q", string(m.MinimumTickSize), "0.01")
+	}
+	if string(m.Rewards.MinSize) != "0" {
+		t.Errorf("Rewards.MinSize = %q, want %q", string(m.Rewards.MinSize), "0")
+	}
+}
+
+func TestClobMarketCursorPageNumericFields(t *testing.T) {
+	// Simulates the actual /markets response that was failing
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"data": [{
+				"condition_id": "0xabc",
+				"question": "Test",
+				"minimum_order_size": 15,
+				"minimum_tick_size": 0.01,
+				"maker_base_fee": 0,
+				"taker_base_fee": 0,
+				"tokens": [],
+				"rewards": {"min_size": 0, "max_spread": 0, "rates": null}
+			}],
+			"next_cursor": ""
+		}`))
+	}))
+
+	page, err := clob.ListMarkets(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListMarkets() error: %v", err)
+	}
+	if len(page.Data) != 1 {
+		t.Fatalf("len(Data) = %d, want 1", len(page.Data))
+	}
+	if string(page.Data[0].MinimumOrderSize) != "15" {
+		t.Errorf("MinimumOrderSize = %q, want %q", string(page.Data[0].MinimumOrderSize), "15")
+	}
+}
