@@ -165,3 +165,94 @@ type SimplifiedMarket struct {
 	Tokens          []Token  `json:"tokens"`
 	Rewards         *Rewards `json:"rewards"`
 }
+
+// Order represents a full order returned by the CLOB API.
+type Order struct {
+	ID              string `json:"id"`
+	Market          string `json:"market"`
+	AssetID         string `json:"asset_id"`
+	Side            string `json:"side"`
+	OriginalSize    string `json:"original_size"`
+	SizeMatched     string `json:"size_matched"`
+	Price           string `json:"price"`
+	Outcome         string `json:"outcome"`
+	Owner           string `json:"owner"`
+	Status          string `json:"status"`
+	ExpirationTime  string `json:"expiration"`
+	Type            string `json:"type"`
+	CreatedAt       string `json:"created_at"`
+	AssociateTradeIDs []string `json:"associate_trades"`
+}
+
+// OpenOrder represents an open order in a list response.
+type OpenOrder struct {
+	ID              string `json:"id"`
+	Market          string `json:"market"`
+	AssetID         string `json:"asset_id"`
+	Side            string `json:"side"`
+	OriginalSize    string `json:"original_size"`
+	SizeMatched     string `json:"size_matched"`
+	Price           string `json:"price"`
+	Outcome         string `json:"outcome"`
+	Owner           string `json:"owner"`
+	Status          string `json:"status"`
+	ExpirationTime  string `json:"expiration"`
+	Type            string `json:"type"`
+	CreatedAt       string `json:"created_at"`
+}
+
+// UserTrade represents a trade in the authenticated user's trade history.
+type UserTrade struct {
+	ID             string `json:"id"`
+	Market         string `json:"market"`
+	AssetID        string `json:"asset_id"`
+	Side           string `json:"side"`
+	Size           string `json:"size"`
+	FeeRateBPS     string `json:"fee_rate_bps"`
+	Price          string `json:"price"`
+	Status         string `json:"status"`
+	Outcome        string `json:"outcome"`
+	Owner          string `json:"owner"`
+	MakerAddress   string `json:"maker_address"`
+	MatchTime      string `json:"match_time"`
+	TradeOwner     string `json:"trader"`
+	TransactionHash string `json:"transaction_hash"`
+	BucketIndex    int    `json:"bucket_index"`
+	Type           string `json:"type"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// BalanceAllowance holds a user's balance and allowance information.
+type BalanceAllowance struct {
+	Balance   string `json:"balance"`
+	Allowance string `json:"allowance"`
+}
+
+// Notification represents a CLOB notification.
+type Notification struct {
+	Type      string `json:"type"`
+	Payload   string `json:"payload"`
+	Timestamp string `json:"timestamp"`
+}
+
+// OrdersParams holds filter parameters for the GetOrders endpoint.
+type OrdersParams struct {
+	Market *string
+	Asset  *string
+}
+
+// ClobTradesParams holds filter parameters for the authenticated CLOB GetTrades endpoint.
+type ClobTradesParams struct {
+	Market *string
+	Asset  *string
+}
+
+// BalanceParams holds parameters for the GetBalanceAllowance endpoint.
+type BalanceParams struct {
+	AssetType *string
+}
+
+// CancelOrdersPayload is the request body for canceling multiple orders.
+type CancelOrdersPayload struct {
+	OrderIDs []string `json:"ids"`
+}

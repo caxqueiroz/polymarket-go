@@ -18,6 +18,16 @@ func newTestClobClient(handler http.Handler) *ClobClient {
 	return c.Clob
 }
 
+func newTestClobClientAuth(handler http.Handler) *ClobClient {
+	srv := httptest.NewServer(handler)
+	c := NewClient(
+		WithHTTPClient(srv.Client()),
+		WithClobBaseURL(srv.URL),
+		WithCredentials(testCreds),
+	)
+	return c.Clob
+}
+
 func TestClobHealth(t *testing.T) {
 	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -562,6 +572,244 @@ func TestClobMarketNumericFields(t *testing.T) {
 	if string(m.Rewards.MinSize) != "0" {
 		t.Errorf("Rewards.MinSize = %q, want %q", string(m.Rewards.MinSize), "0")
 	}
+}
+
+// requireAuthHeaders verifies all 5 POLY_* headers are present.
+func requireAuthHeaders(t *testing.T, r *http.Request) {
+	t.Helper()
+	for _, h := range []string{"POLY_API_KEY", "POLY_SIGNATURE", "POLY_TIMESTAMP", "POLY_PASSPHRASE", "POLY_ADDRESS"} {
+		if r.Header.Get(h) == "" {
+			t.Errorf("missing auth header %s", h)
+		}
+	}
+}
+
+func TestClobGetOrder(t *testing.T) {
+	order := Order{
+		ID:      "order-123",
+		Market:  "0xabc",
+		AssetID: "tok1",
+		Side:    "BUY",
+		Price:   "0.65",
+		Status:  "LIVE",
+	}
+
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.URL.Path != "/order/order-123" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(order)
+	}))
+
+	got, err := clob.GetOrder(context.Background(), "order-123")
+	if err != nil {
+		t.Fatalf("GetOrder() error: %v", err)
+	}
+	if got.ID != "order-123" {
+		t.Errorf("ID = %q, want %q", got.ID, "order-123")
+	}
+	if got.Price != "0.65" {
+		t.Errorf("Price = %q, want %q", got.Price, "0.65")
+	}
+}
+
+func TestClobGetOrders(t *testing.T) {
+	orders := []OpenOrder{
+		{ID: "o1", Market: "0xabc", Side: "BUY", Price: "0.65"},
+		{ID: "o2", Market: "0xabc", Side: "SELL", Price: "0.70"},
+	}
+
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.URL.Path != "/orders" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if m := r.URL.Query().Get("market"); m != "0xabc" {
+			t.Errorf("market = %q, want %q", m, "0xabc")
+		}
+		json.NewEncoder(w).Encode(orders)
+	}))
+
+	market := "0xabc"
+	got, err := clob.GetOrders(context.Background(), &OrdersParams{Market: &market})
+	if err != nil {
+		t.Fatalf("GetOrders() error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].ID != "o1" {
+		t.Errorf("ID = %q, want %q", got[0].ID, "o1")
+	}
+}
+
+func TestClobGetOrdersNilParams(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		json.NewEncoder(w).Encode([]OpenOrder{})
+	}))
+
+	got, err := clob.GetOrders(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetOrders() error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
+func TestClobCancelOrder(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %q, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/order/order-456" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	if err := clob.CancelOrder(context.Background(), "order-456"); err != nil {
+		t.Fatalf("CancelOrder() error: %v", err)
+	}
+}
+
+func TestClobCancelOrders(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %q, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/orders" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		body, _ := io.ReadAll(r.Body)
+		var payload CancelOrdersPayload
+		json.Unmarshal(body, &payload)
+		if len(payload.OrderIDs) != 2 {
+			t.Errorf("len(OrderIDs) = %d, want 2", len(payload.OrderIDs))
+		}
+
+		json.NewEncoder(w).Encode([]string{"o1", "o2"})
+	}))
+
+	got, err := clob.CancelOrders(context.Background(), []string{"o1", "o2"})
+	if err != nil {
+		t.Fatalf("CancelOrders() error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2", len(got))
+	}
+}
+
+func TestClobCancelAll(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %q, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/cancel-all" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode([]string{"o1", "o2", "o3"})
+	}))
+
+	got, err := clob.CancelAll(context.Background())
+	if err != nil {
+		t.Fatalf("CancelAll() error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("len = %d, want 3", len(got))
+	}
+}
+
+func TestClobGetTrades(t *testing.T) {
+	trades := []UserTrade{
+		{ID: "t1", Market: "0xabc", Side: "BUY", Price: "0.65", Size: "10"},
+	}
+
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.URL.Path != "/trades" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(trades)
+	}))
+
+	got, err := clob.GetTrades(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetTrades() error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Price != "0.65" {
+		t.Errorf("Price = %q, want %q", got[0].Price, "0.65")
+	}
+}
+
+func TestClobGetBalanceAllowance(t *testing.T) {
+	ba := BalanceAllowance{Balance: "1000.00", Allowance: "5000.00"}
+
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.URL.Path != "/balance-allowance" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(ba)
+	}))
+
+	got, err := clob.GetBalanceAllowance(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetBalanceAllowance() error: %v", err)
+	}
+	if got.Balance != "1000.00" {
+		t.Errorf("Balance = %q, want %q", got.Balance, "1000.00")
+	}
+	if got.Allowance != "5000.00" {
+		t.Errorf("Allowance = %q, want %q", got.Allowance, "5000.00")
+	}
+}
+
+func TestClobGetNotifications(t *testing.T) {
+	notifs := []Notification{
+		{Type: "order_filled", Payload: "order-123", Timestamp: "1700000000"},
+	}
+
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		if r.URL.Path != "/notifications" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(notifs)
+	}))
+
+	got, err := clob.GetNotifications(context.Background())
+	if err != nil {
+		t.Fatalf("GetNotifications() error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Type != "order_filled" {
+		t.Errorf("Type = %q, want %q", got[0].Type, "order_filled")
+	}
+}
+
+func TestClobNoAuthHeadersWithoutCredentials(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{"POLY_API_KEY", "POLY_SIGNATURE", "POLY_TIMESTAMP", "POLY_PASSPHRASE", "POLY_ADDRESS"} {
+			if r.Header.Get(h) != "" {
+				t.Errorf("header %s should be empty without credentials, got %q", h, r.Header.Get(h))
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	clob.Health(context.Background())
 }
 
 func TestClobMarketCursorPageNumericFields(t *testing.T) {

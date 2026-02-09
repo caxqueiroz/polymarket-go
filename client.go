@@ -31,6 +31,7 @@ type options struct {
 	clobBaseURL  string
 	gammaBaseURL string
 	dataBaseURL  string
+	creds        *Credentials
 }
 
 // WithHTTPClient sets a custom HTTP client.
@@ -53,6 +54,11 @@ func WithDataBaseURL(u string) Option {
 	return func(o *options) { o.dataBaseURL = u }
 }
 
+// WithCredentials sets API key credentials for authenticated CLOB requests.
+func WithCredentials(c *Credentials) Option {
+	return func(o *options) { o.creds = c }
+}
+
 // NewClient creates a new Polymarket client.
 func NewClient(opts ...Option) *Client {
 	o := &options{
@@ -67,6 +73,7 @@ func NewClient(opts ...Option) *Client {
 
 	base := &baseClient{
 		httpClient: o.httpClient,
+		creds:      o.creds,
 	}
 
 	return &Client{
@@ -79,6 +86,7 @@ func NewClient(opts ...Option) *Client {
 // baseClient holds the shared HTTP logic.
 type baseClient struct {
 	httpClient *http.Client
+	creds      *Credentials
 }
 
 func (b *baseClient) get(ctx context.Context, baseURL, path string, params url.Values, out any) error {
@@ -92,6 +100,12 @@ func (b *baseClient) get(ctx context.Context, baseURL, path string, params url.V
 		return fmt.Errorf("polymarket: creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+
+	if b.creds != nil {
+		if err := signRequest(req, b.creds, ""); err != nil {
+			return err
+		}
+	}
 
 	return b.do(req, out)
 }
@@ -107,6 +121,12 @@ func (b *baseClient) getRaw(ctx context.Context, baseURL, path string, params ur
 		return nil, fmt.Errorf("polymarket: creating request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+
+	if b.creds != nil {
+		if err := signRequest(req, b.creds, ""); err != nil {
+			return nil, err
+		}
+	}
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
@@ -144,6 +164,12 @@ func (b *baseClient) postJSON(ctx context.Context, baseURL, path string, payload
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
+	if b.creds != nil {
+		if err := signRequest(req, b.creds, string(data)); err != nil {
+			return err
+		}
+	}
+
 	return b.do(req, out)
 }
 
@@ -160,6 +186,12 @@ func (b *baseClient) postJSONRaw(ctx context.Context, baseURL, path string, payl
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+
+	if b.creds != nil {
+		if err := signRequest(req, b.creds, string(data)); err != nil {
+			return nil, err
+		}
+	}
 
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
@@ -210,4 +242,57 @@ func (b *baseClient) do(req *http.Request, out any) error {
 	}
 
 	return nil
+}
+
+func (b *baseClient) deleteRaw(ctx context.Context, baseURL, path string, payload any) ([]byte, error) {
+	var data []byte
+	var err error
+	if payload != nil {
+		data, err = json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("polymarket: encoding request body: %w", err)
+		}
+	}
+
+	u := baseURL + path
+	var req *http.Request
+	if len(data) > 0 {
+		req, err = http.NewRequestWithContext(ctx, http.MethodDelete, u, bytes.NewReader(data))
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if len(data) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	if b.creds != nil {
+		if err := signRequest(req, b.creds, string(data)); err != nil {
+			return nil, err
+		}
+	}
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: reading response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, &APIError{
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+			Body:       string(body),
+		}
+	}
+
+	return body, nil
 }

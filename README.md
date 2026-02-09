@@ -1,6 +1,6 @@
 # polymarket-go
 ## Experimental
-A Go client library for the [Polymarket](https://polymarket.com) public APIs. Provides read-only access to market data, order books, pricing, events, trades, and positions across all three Polymarket API surfaces.
+A Go client library for the [Polymarket](https://polymarket.com) APIs. Provides access to market data, order books, pricing, events, trades, positions, and authenticated endpoints (orders, balances, cancellations) across all three Polymarket API surfaces.
 
 **Zero external dependencies** — built entirely on the Go standard library.
 
@@ -13,6 +13,8 @@ go get polymarket-go
 Requires **Go 1.25** or later.
 
 ## Quick Start
+
+### Public endpoints (no credentials needed)
 
 ```go
 package main
@@ -47,6 +49,24 @@ func main() {
 }
 ```
 
+### Authenticated endpoints (orders, balances, trades)
+
+```go
+client := polymarket.NewClient(
+    polymarket.WithCredentials(&polymarket.Credentials{
+        Key:        os.Getenv("POLY_API_KEY"),
+        Secret:     os.Getenv("POLY_API_SECRET"),
+        Passphrase: os.Getenv("POLY_PASSPHRASE"),
+        Address:    os.Getenv("POLY_ADDRESS"),
+    }),
+)
+
+orders, err := client.Clob.GetOrders(ctx, nil)
+balance, err := client.Clob.GetBalanceAllowance(ctx, nil)
+trades, err := client.Clob.GetTrades(ctx, nil)
+err = client.Clob.CancelAll(ctx)
+```
+
 ## Architecture
 
 The top-level `Client` provides access to three sub-clients, each targeting a different Polymarket API:
@@ -65,7 +85,7 @@ client.Data   // Trades, positions, activity, open interest
 | `GammaClient` | `https://gamma-api.polymarket.com` | Market/event metadata, search, tags |
 | `DataClient` | `https://data-api.polymarket.com` | Trades, positions, activity, holders |
 
-All endpoints are **public and unauthenticated** (read-only market data).
+Public endpoints work without credentials. Authenticated CLOB endpoints (orders, trades, balances) require API key credentials.
 
 ## Configuration
 
@@ -86,6 +106,43 @@ client := polymarket.NewClient(
 | `WithClobBaseURL(u)` | Override CLOB API base URL |
 | `WithGammaBaseURL(u)` | Override Gamma API base URL |
 | `WithDataBaseURL(u)` | Override Data API base URL |
+| `WithCredentials(c)` | Set API key credentials for authenticated CLOB requests |
+
+## Authentication
+
+Several CLOB endpoints require API key authentication. To get your API key, secret, and passphrase, follow the [Polymarket CLOB Authentication guide](https://docs.polymarket.com/developers/CLOB/authentication) to derive credentials from your wallet.
+
+Pass your credentials via `WithCredentials`:
+
+```go
+client := polymarket.NewClient(
+    polymarket.WithCredentials(&polymarket.Credentials{
+        Key:        "your-api-key",        // API key (UUID)
+        Secret:     "your-base64-secret",  // Base64url-encoded HMAC secret
+        Passphrase: "your-passphrase",     // Passphrase
+        Address:    "0xYourWallet",        // Wallet address (hex)
+    }),
+)
+
+// Authenticated endpoints now work automatically
+orders, err := client.Clob.GetOrders(ctx, nil)
+balance, err := client.Clob.GetBalanceAllowance(ctx, nil)
+err = client.Clob.CancelOrder(ctx, "order-id")
+```
+
+When credentials are set, the library automatically signs every CLOB request with the required `POLY_*` headers (HMAC-SHA256). Public endpoints continue to work normally — the auth headers are simply included alongside your requests.
+
+For production use, load credentials from environment variables:
+
+```go
+client := polymarket.NewClient(
+    polymarket.WithCredentials(&polymarket.Credentials{
+        Key:        os.Getenv("POLY_API_KEY"),
+        Secret:     os.Getenv("POLY_API_SECRET"),
+        Passphrase: os.Getenv("POLY_PASSPHRASE"),
+        Address:    os.Getenv("POLY_ADDRESS"),
+    }),
+)
 
 ## API Reference
 
@@ -124,6 +181,18 @@ client.Clob.GetNegRisk(ctx, tokenID)                        // (bool, error)
 client.Clob.GetFeeRateBPS(ctx, tokenID)                     // (float64, error)
 client.Clob.GetPriceHistory(ctx, PriceHistoryParams{...})   // (*PriceHistoryResponse, error)
 client.Clob.GetMarketTradeEvents(ctx, conditionID)          // ([]MarketTradeEvent, error)
+
+// Authenticated — Orders (requires WithCredentials)
+client.Clob.GetOrder(ctx, orderID)                          // (*Order, error)
+client.Clob.GetOrders(ctx, &OrdersParams{...})              // ([]OpenOrder, error)
+client.Clob.CancelOrder(ctx, orderID)                       // error
+client.Clob.CancelOrders(ctx, []string{...})                // ([]string, error)
+client.Clob.CancelAll(ctx)                                  // ([]string, error)
+
+// Authenticated — Trades, Balance, Notifications
+client.Clob.GetTrades(ctx, &ClobTradesParams{...})          // ([]UserTrade, error)
+client.Clob.GetBalanceAllowance(ctx, &BalanceParams{...})   // (*BalanceAllowance, error)
+client.Clob.GetNotifications(ctx)                           // ([]Notification, error)
 ```
 
 ### Gamma Client — Market Metadata
@@ -261,6 +330,7 @@ See the [`examples/`](examples/) directory for runnable programs:
 | [`examples/markets`](examples/markets/main.go) | List active markets with volume and pricing |
 | [`examples/prices`](examples/prices/main.go) | Fetch CLOB prices, midpoints, and spreads |
 | [`examples/orderbook`](examples/orderbook/main.go) | Display order book depth for a market |
+| [`examples/orders`](examples/orders/main.go) | Authenticated: list orders, balance, trades |
 
 Run an example:
 
@@ -282,16 +352,17 @@ go run ./examples/markets
 ```
 polymarket-go/
   client.go          # Client, NewClient, functional options, shared HTTP
+  auth.go            # Credentials, HMAC signing, request signing
   errors.go          # APIError, IsNotFound, IsRateLimited
   models.go          # Shared types: Side, Interval, TickSize, BookParams
   pagination.go      # CursorPage[T], CursorIterator[T]
-  clob.go            # ClobClient (20 methods)
+  clob.go            # ClobClient (~28 methods, public + authenticated)
   clob_models.go     # CLOB request/response types
   gamma.go           # GammaClient (10 methods)
   gamma_models.go    # Gamma types, Number, StringSlice unmarshalers
   data.go            # DataClient (5 methods)
   data_models.go     # Data types
-  *_test.go          # Tests (54 total)
+  *_test.go          # Tests
   examples/          # Runnable examples
 ```
 
