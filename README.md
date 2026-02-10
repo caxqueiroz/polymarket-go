@@ -36,8 +36,8 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    for _, r := range results {
-        fmt.Println(r.Title)
+    for _, e := range results.Events {
+        fmt.Println(e.Title)
     }
 
     // Get order book depth
@@ -209,7 +209,7 @@ client.Gamma.GetEventByID(ctx, id)                          // (*GammaEvent, err
 client.Gamma.GetEventBySlug(ctx, slug)                      // (*GammaEvent, error)
 
 // Search & tags
-client.Gamma.Search(ctx, query)                             // ([]SearchResult, error)
+client.Gamma.Search(ctx, query)                             // (SearchResponse, error)
 client.Gamma.ListTags(ctx)                                  // ([]GammaTag, error)
 client.Gamma.GetTagByID(ctx, id)                            // (*GammaTag, error)
 client.Gamma.GetTagBySlug(ctx, slug)                        // (*GammaTag, error)
@@ -331,6 +331,7 @@ See the [`examples/`](examples/) directory for runnable programs:
 | [`examples/prices`](examples/prices/main.go) | Fetch CLOB prices, midpoints, and spreads |
 | [`examples/orderbook`](examples/orderbook/main.go) | Display order book depth for a market |
 | [`examples/orders`](examples/orders/main.go) | Authenticated: list orders, balance, trades |
+| [`examples/search`](examples/search/main.go) | Search markets and events by keyword |
 
 Run an example:
 
@@ -358,7 +359,7 @@ polymarket-go/
   pagination.go      # CursorPage[T], CursorIterator[T]
   clob.go            # ClobClient (~28 methods, public + authenticated)
   clob_models.go     # CLOB request/response types
-  gamma.go           # GammaClient (10 methods)
+  gamma.go           # GammaClient (12 methods)
   gamma_models.go    # Gamma types, Number, StringSlice unmarshalers
   data.go            # DataClient (5 methods)
   data_models.go     # Data types
