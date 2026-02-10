@@ -90,13 +90,13 @@ func (g *GammaClient) GetEventBySlug(ctx context.Context, slug string) (*GammaEv
 }
 
 // Search performs a text search across markets and events.
-func (g *GammaClient) Search(ctx context.Context, query string) ([]SearchResult, error) {
+func (g *GammaClient) Search(ctx context.Context, query string) (SearchResponse, error) {
 	params := url.Values{}
 	params.Set("q", query)
 
-	var results []SearchResult
+	var results SearchResponse
 	if err := g.base.get(ctx, g.baseURL, "/public-search", params, &results); err != nil {
-		return nil, err
+		return SearchResponse{}, err
 	}
 	return results, nil
 }

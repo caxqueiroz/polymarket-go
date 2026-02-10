@@ -167,8 +167,10 @@ func TestGammaGetEventBySlug(t *testing.T) {
 }
 
 func TestGammaSearch(t *testing.T) {
-	results := []SearchResult{
-		{ID: "1", Title: "Bitcoin prediction"},
+	results := SearchResponse{
+		Events: []GammaEvent{
+			{ID: "1", Title: "Bitcoin prediction"},
+		},
 	}
 
 	gamma := newTestGammaClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,8 +187,8 @@ func TestGammaSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error: %v", err)
 	}
-	if len(got) != 1 {
-		t.Errorf("len(results) = %d, want 1", len(got))
+	if len(got.Events) != 1 {
+		t.Errorf("len(results) = %d, want 1", len(got.Events))
 	}
 }
 

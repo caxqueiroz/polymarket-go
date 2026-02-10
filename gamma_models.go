@@ -8,42 +8,42 @@ import (
 
 // GammaMarket represents a market from the Gamma API.
 type GammaMarket struct {
-	ID                 string      `json:"id"`
-	Question           string      `json:"question"`
-	ConditionID        string      `json:"conditionId"`
-	Slug               string      `json:"slug"`
-	EndDate            string      `json:"endDate"`
-	StartDate          string      `json:"startDate"`
-	Description        string      `json:"description"`
-	ResolutionSource   string      `json:"resolutionSource"`
-	Image              string      `json:"image"`
-	Icon               string      `json:"icon"`
-	Active             bool        `json:"active"`
-	Closed             bool        `json:"closed"`
-	Archived           bool        `json:"archived"`
-	Featured           bool        `json:"featured"`
-	Restricted         bool        `json:"restricted"`
-	Liquidity          Number      `json:"liquidity"`
-	Volume             Number      `json:"volume"`
-	Volume24hr         Number      `json:"volume24hr"`
-	OpenInterest       Number      `json:"openInterest"`
-	EnableOrderBook    bool        `json:"enableOrderBook"`
-	LiquidityClob      Number      `json:"liquidityClob"`
-	LiquidityAmm       Number      `json:"liquidityAmm"`
-	NegRisk            bool        `json:"negRisk"`
-	NegRiskMarketID    string      `json:"negRiskMarketID"`
-	NegRiskFeeBips     Number      `json:"negRiskFeeBips"`
-	CommentCount       int         `json:"commentCount"`
-	ClobTokenIDs       StringSlice `json:"clobTokenIds"`
-	Outcomes           StringSlice `json:"outcomes"`
-	OutcomePrices      StringSlice `json:"outcomePrices"`
-	BestBid            Number      `json:"bestBid"`
-	BestAsk            Number      `json:"bestAsk"`
-	LastTradePrice     Number      `json:"lastTradePrice"`
-	Spread             Number      `json:"spread"`
-	OneDayPriceChange  Number      `json:"oneDayPriceChange"`
-	Category           string      `json:"category"`
-	EventSlug          string      `json:"eventSlug"`
+	ID                string      `json:"id"`
+	Question          string      `json:"question"`
+	ConditionID       string      `json:"conditionId"`
+	Slug              string      `json:"slug"`
+	EndDate           string      `json:"endDate"`
+	StartDate         string      `json:"startDate"`
+	Description       string      `json:"description"`
+	ResolutionSource  string      `json:"resolutionSource"`
+	Image             string      `json:"image"`
+	Icon              string      `json:"icon"`
+	Active            bool        `json:"active"`
+	Closed            bool        `json:"closed"`
+	Archived          bool        `json:"archived"`
+	Featured          bool        `json:"featured"`
+	Restricted        bool        `json:"restricted"`
+	Liquidity         Number      `json:"liquidity"`
+	Volume            Number      `json:"volume"`
+	Volume24hr        Number      `json:"volume24hr"`
+	OpenInterest      Number      `json:"openInterest"`
+	EnableOrderBook   bool        `json:"enableOrderBook"`
+	LiquidityClob     Number      `json:"liquidityClob"`
+	LiquidityAmm      Number      `json:"liquidityAmm"`
+	NegRisk           bool        `json:"negRisk"`
+	NegRiskMarketID   string      `json:"negRiskMarketID"`
+	NegRiskFeeBips    Number      `json:"negRiskFeeBips"`
+	CommentCount      int         `json:"commentCount"`
+	ClobTokenIDs      StringSlice `json:"clobTokenIds"`
+	Outcomes          StringSlice `json:"outcomes"`
+	OutcomePrices     StringSlice `json:"outcomePrices"`
+	BestBid           Number      `json:"bestBid"`
+	BestAsk           Number      `json:"bestAsk"`
+	LastTradePrice    Number      `json:"lastTradePrice"`
+	Spread            Number      `json:"spread"`
+	OneDayPriceChange Number      `json:"oneDayPriceChange"`
+	Category          string      `json:"category"`
+	EventSlug         string      `json:"eventSlug"`
 }
 
 // GammaEvent represents an event from the Gamma API.
@@ -92,32 +92,83 @@ type GammaTag struct {
 	ForceHide bool   `json:"forceHide"`
 }
 
-// SearchResult represents a search result from the Gamma API.
-type SearchResult struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	Image       string `json:"image"`
-	Icon        string `json:"icon"`
-	Active      bool   `json:"active"`
-	Closed      bool   `json:"closed"`
+// SearchResponse represents the top-level search response from the Gamma API.
+type SearchResponse struct {
+	Events     []GammaEvent     `json:"events"`
+	Tags       []GammaTagSearch `json:"tags"`
+	Profiles   []ProfileSearch  `json:"profiles"`
+	Pagination Pagination       `json:"pagination"`
+}
+
+// GammaTagSearch models the "tags" found in the search response.
+type GammaTagSearch struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Slug       string `json:"slug"`
+	EventCount int    `json:"event_count"`
+}
+
+// ProfileSearch represents a profile item in the search result.
+type ProfileSearch struct {
+	ID                    string          `json:"id"`
+	Name                  string          `json:"name"`
+	User                  int             `json:"user"`
+	Referral              string          `json:"referral"`
+	CreatedBy             int             `json:"createdBy"`
+	UpdatedBy             int             `json:"updatedBy"`
+	CreatedAt             string          `json:"createdAt"`
+	UpdatedAt             string          `json:"updatedAt"`
+	UtmSource             string          `json:"utmSource"`
+	UtmMedium             string          `json:"utmMedium"`
+	UtmCampaign           string          `json:"utmCampaign"`
+	UtmContent            string          `json:"utmContent"`
+	UtmTerm               string          `json:"utmTerm"`
+	WalletActivated       bool            `json:"walletActivated"`
+	Pseudonym             string          `json:"pseudonym"`
+	DisplayUsernamePublic bool            `json:"displayUsernamePublic"`
+	ProfileImage          string          `json:"profileImage"`
+	Bio                   string          `json:"bio"`
+	ProxyWallet           string          `json:"proxyWallet"`
+	ProfileImageOptimized *ImageOptimized `json:"profileImageOptimized,omitempty"`
+	IsCloseOnly           bool            `json:"isCloseOnly"`
+	IsCertReq             bool            `json:"isCertReq"`
+	CertReqDate           string          `json:"certReqDate"`
+}
+
+// Pagination describes the search result pagination state.
+type Pagination struct {
+	HasMore      bool `json:"hasMore"`
+	TotalResults int  `json:"totalResults"`
+}
+
+// ImageOptimized describes an optimized image for Gamma models.
+type ImageOptimized struct {
+	ID                        string `json:"id"`
+	ImageUrlSource            string `json:"imageUrlSource"`
+	ImageUrlOptimized         string `json:"imageUrlOptimized"`
+	ImageSizeKbSource         int    `json:"imageSizeKbSource"`
+	ImageSizeKbOptimized      int    `json:"imageSizeKbOptimized"`
+	ImageOptimizedComplete    bool   `json:"imageOptimizedComplete"`
+	ImageOptimizedLastUpdated string `json:"imageOptimizedLastUpdated"`
+	RelID                     int    `json:"relID"`
+	Field                     string `json:"field"`
+	RelName                   string `json:"relname"`
 }
 
 // GammaMarketParams holds query parameters for the Gamma markets endpoint.
 type GammaMarketParams struct {
-	Limit          *int
-	Offset         *int
-	Order          string
-	Ascending      *bool
-	ID             string
-	Slug           string
-	Closed         *bool
-	Active         *bool
-	TagID          *int
-	ExcludeTagID   []int
-	RelatedTags    *bool
-	Featured       *bool
+	Limit           *int
+	Offset          *int
+	Order           string
+	Ascending       *bool
+	ID              string
+	Slug            string
+	Closed          *bool
+	Active          *bool
+	TagID           *int
+	ExcludeTagID    []int
+	RelatedTags     *bool
+	Featured        *bool
 	EnableOrderBook *bool
 }
 
