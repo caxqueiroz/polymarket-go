@@ -303,11 +303,20 @@ func (c *ClobClient) GetFeeRateBPS(ctx context.Context, tokenID string) (float64
 	params := url.Values{}
 	params.Set("token_id", tokenID)
 
-	body, err := c.base.getRaw(ctx, c.baseURL, "/fee-rate-bps", params)
+	body, err := c.base.getRaw(ctx, c.baseURL, "/fee-rate", params)
 	if err != nil {
 		return 0, err
 	}
 
+	// Try wrapped object first: {"base_fee": 0}
+	var wrapped struct {
+		BaseFee float64 `json:"base_fee"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil {
+		return wrapped.BaseFee, nil
+	}
+
+	// Fall back to bare number
 	var result float64
 	if err := json.Unmarshal(body, &result); err != nil {
 		return 0, fmt.Errorf("polymarket: decoding fee rate: %w", err)
