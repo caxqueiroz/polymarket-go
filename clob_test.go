@@ -2,6 +2,7 @@ package polymarket
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -596,7 +597,7 @@ func TestClobGetOrder(t *testing.T) {
 
 	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireAuthHeaders(t, r)
-		if r.URL.Path != "/order/order-123" {
+		if r.URL.Path != "/data/order/order-123" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(order)
@@ -615,20 +616,22 @@ func TestClobGetOrder(t *testing.T) {
 }
 
 func TestClobGetOrders(t *testing.T) {
-	orders := []OpenOrder{
-		{ID: "o1", Market: "0xabc", Side: "BUY", Price: "0.65"},
-		{ID: "o2", Market: "0xabc", Side: "SELL", Price: "0.70"},
-	}
-
 	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireAuthHeaders(t, r)
-		if r.URL.Path != "/orders" {
+		if r.URL.Path != "/data/orders" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		if m := r.URL.Query().Get("market"); m != "0xabc" {
 			t.Errorf("market = %q, want %q", m, "0xabc")
 		}
-		json.NewEncoder(w).Encode(orders)
+		// Return paginated response matching Polymarket API format
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []OpenOrder{
+				{ID: "o1", Market: "0xabc", Side: "BUY", Price: "0.65"},
+				{ID: "o2", Market: "0xabc", Side: "SELL", Price: "0.70"},
+			},
+			"next_cursor": "LTE=", // END_CURSOR
+		})
 	}))
 
 	market := "0xabc"
@@ -647,7 +650,10 @@ func TestClobGetOrders(t *testing.T) {
 func TestClobGetOrdersNilParams(t *testing.T) {
 	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireAuthHeaders(t, r)
-		json.NewEncoder(w).Encode([]OpenOrder{})
+		json.NewEncoder(w).Encode(map[string]any{
+			"data":        []OpenOrder{},
+			"next_cursor": "LTE=",
+		})
 	}))
 
 	got, err := clob.GetOrders(context.Background(), nil)
@@ -727,16 +733,17 @@ func TestClobCancelAll(t *testing.T) {
 }
 
 func TestClobGetTrades(t *testing.T) {
-	trades := []UserTrade{
-		{ID: "t1", Market: "0xabc", Side: "BUY", Price: "0.65", Size: "10"},
-	}
-
 	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireAuthHeaders(t, r)
-		if r.URL.Path != "/trades" {
+		if r.URL.Path != "/data/trades" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(trades)
+		json.NewEncoder(w).Encode(map[string]any{
+			"data": []UserTrade{
+				{ID: "t1", Market: "0xabc", Side: "BUY", Price: "0.65", Size: "10"},
+			},
+			"next_cursor": "LTE=",
+		})
 	}))
 
 	got, err := clob.GetTrades(context.Background(), nil)
@@ -810,6 +817,285 @@ func TestClobNoAuthHeadersWithoutCredentials(t *testing.T) {
 	}))
 
 	clob.Health(context.Background())
+}
+
+// ---- L1 Auth API Key Tests ----
+
+// requireL1AuthHeaders checks that L1 (EIP-712) authentication headers are present.
+func requireL1AuthHeaders(t *testing.T, r *http.Request) {
+	t.Helper()
+	for _, h := range []string{"POLY_ADDRESS", "POLY_SIGNATURE", "POLY_TIMESTAMP", "POLY_NONCE"} {
+		if r.Header.Get(h) == "" {
+			t.Errorf("missing L1 auth header %s", h)
+		}
+	}
+}
+
+func TestClobCreateOrDeriveApiCreds(t *testing.T) {
+	t.Run("create succeeds", func(t *testing.T) {
+		clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// CreateOrDeriveApiCreds first tries POST /auth/api-key (create)
+			if r.Method != http.MethodPost {
+				t.Errorf("method = %q, want POST", r.Method)
+			}
+			if r.URL.Path != "/auth/api-key" {
+				t.Errorf("path = %q, want /auth/api-key", r.URL.Path)
+			}
+			requireL1AuthHeaders(t, r)
+
+			addr := r.Header.Get("POLY_ADDRESS")
+			if addr != "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" {
+				t.Errorf("POLY_ADDRESS = %q, want 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", addr)
+			}
+
+			sig := r.Header.Get("POLY_SIGNATURE")
+			if len(sig) != 132 {
+				t.Errorf("POLY_SIGNATURE length = %d, want 132", len(sig))
+			}
+
+			w.Write([]byte(`{
+				"apiKey": "test-api-key-uuid",
+				"secret": "dGVzdC1zZWNyZXQtYmFzZTY0",
+				"passphrase": "test-passphrase"
+			}`))
+		}))
+
+		signer, _ := NewOrderSigner(testPrivateKey, Polygon)
+		creds, err := clob.CreateOrDeriveApiCreds(context.Background(), signer)
+		if err != nil {
+			t.Fatalf("CreateOrDeriveApiCreds() error: %v", err)
+		}
+		if creds.ApiKey != "test-api-key-uuid" {
+			t.Errorf("ApiKey = %q, want %q", creds.ApiKey, "test-api-key-uuid")
+		}
+		if creds.Secret != "dGVzdC1zZWNyZXQtYmFzZTY0" {
+			t.Errorf("Secret = %q, want %q", creds.Secret, "dGVzdC1zZWNyZXQtYmFzZTY0")
+		}
+		if creds.Passphrase != "test-passphrase" {
+			t.Errorf("Passphrase = %q, want %q", creds.Passphrase, "test-passphrase")
+		}
+	})
+
+	t.Run("create fails then derive succeeds", func(t *testing.T) {
+		calls := 0
+		clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				// First call: CreateApiKey → POST /auth/api-key → 409 (conflict)
+				if r.Method != http.MethodPost {
+					t.Errorf("call 1: method = %q, want POST", r.Method)
+				}
+				if r.URL.Path != "/auth/api-key" {
+					t.Errorf("call 1: path = %q, want /auth/api-key", r.URL.Path)
+				}
+				requireL1AuthHeaders(t, r)
+				w.WriteHeader(http.StatusConflict)
+				w.Write([]byte(`{"error":"key already exists"}`))
+				return
+			}
+			// Second call: DeriveApiKey → GET /auth/derive-api-key
+			if r.Method != http.MethodGet {
+				t.Errorf("call 2: method = %q, want GET", r.Method)
+			}
+			if r.URL.Path != "/auth/derive-api-key" {
+				t.Errorf("call 2: path = %q, want /auth/derive-api-key", r.URL.Path)
+			}
+			requireL1AuthHeaders(t, r)
+			w.Write([]byte(`{
+				"apiKey": "derived-key",
+				"secret": "ZGVyaXZlZC1zZWNyZXQ=",
+				"passphrase": "derived-pass"
+			}`))
+		}))
+
+		signer, _ := NewOrderSigner(testPrivateKey, Polygon)
+		creds, err := clob.CreateOrDeriveApiCreds(context.Background(), signer)
+		if err != nil {
+			t.Fatalf("CreateOrDeriveApiCreds() error: %v", err)
+		}
+		if calls != 2 {
+			t.Errorf("calls = %d, want 2 (create + derive)", calls)
+		}
+		if creds.ApiKey != "derived-key" {
+			t.Errorf("ApiKey = %q, want %q", creds.ApiKey, "derived-key")
+		}
+	})
+}
+
+func TestClobCreateApiKey(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %q, want POST", r.Method)
+		}
+		if r.URL.Path != "/auth/api-key" {
+			t.Errorf("path = %q, want /auth/api-key", r.URL.Path)
+		}
+		requireL1AuthHeaders(t, r)
+
+		w.Write([]byte(`{
+			"apiKey": "new-api-key",
+			"secret": "bmV3LXNlY3JldA==",
+			"passphrase": "new-pass"
+		}`))
+	}))
+
+	signer, _ := NewOrderSigner(testPrivateKey, Polygon)
+	creds, err := clob.CreateApiKey(context.Background(), signer)
+	if err != nil {
+		t.Fatalf("CreateApiKey() error: %v", err)
+	}
+	if creds.ApiKey != "new-api-key" {
+		t.Errorf("ApiKey = %q, want %q", creds.ApiKey, "new-api-key")
+	}
+}
+
+func TestClobDeriveApiKey(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %q, want GET", r.Method)
+		}
+		if r.URL.Path != "/auth/derive-api-key" {
+			t.Errorf("path = %q, want /auth/derive-api-key", r.URL.Path)
+		}
+		requireL1AuthHeaders(t, r)
+
+		w.Write([]byte(`{
+			"apiKey": "derived-key",
+			"secret": "ZGVyaXZlZC1zZWNyZXQ=",
+			"passphrase": "derived-pass"
+		}`))
+	}))
+
+	signer, _ := NewOrderSigner(testPrivateKey, Polygon)
+	creds, err := clob.DeriveApiKey(context.Background(), signer)
+	if err != nil {
+		t.Fatalf("DeriveApiKey() error: %v", err)
+	}
+	if creds.ApiKey != "derived-key" {
+		t.Errorf("ApiKey = %q, want %q", creds.ApiKey, "derived-key")
+	}
+	if creds.Secret != "ZGVyaXZlZC1zZWNyZXQ=" {
+		t.Errorf("Secret = %q, want %q", creds.Secret, "ZGVyaXZlZC1zZWNyZXQ=")
+	}
+}
+
+func TestClobGetApiKeys(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %q, want GET", r.Method)
+		}
+		if r.URL.Path != "/auth/api-keys" {
+			t.Errorf("path = %q, want /auth/api-keys", r.URL.Path)
+		}
+		// GetApiKeys uses L2 (HMAC) auth, not L1
+		w.Write([]byte(`{"apiKeys":["key-1","key-2"]}`))
+	}))
+
+	keys, err := clob.GetApiKeys(context.Background())
+	if err != nil {
+		t.Fatalf("GetApiKeys() error: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("len(keys) = %d, want 2", len(keys))
+	}
+	if keys[0] != "key-1" {
+		t.Errorf("keys[0] = %q, want %q", keys[0], "key-1")
+	}
+	if keys[1] != "key-2" {
+		t.Errorf("keys[1] = %q, want %q", keys[1], "key-2")
+	}
+}
+
+func TestClobDeleteApiKey(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %q, want DELETE", r.Method)
+		}
+		if r.URL.Path != "/auth/api-key" {
+			t.Errorf("path = %q, want /auth/api-key", r.URL.Path)
+		}
+		// DeleteApiKey uses L2 (HMAC) auth, not L1
+
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	err := clob.DeleteApiKey(context.Background())
+	if err != nil {
+		t.Fatalf("DeleteApiKey() error: %v", err)
+	}
+}
+
+func TestApiCredentialsToCredentials(t *testing.T) {
+	creds := &ApiCredentials{
+		ApiKey:     "test-key",
+		Secret:     "test-secret",
+		Passphrase: "test-pass",
+	}
+	addr := "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+	c := creds.ToCredentials(addr)
+
+	if c.Key != "test-key" {
+		t.Errorf("Key = %q, want %q", c.Key, "test-key")
+	}
+	if c.Secret != "test-secret" {
+		t.Errorf("Secret = %q, want %q", c.Secret, "test-secret")
+	}
+	if c.Passphrase != "test-pass" {
+		t.Errorf("Passphrase = %q, want %q", c.Passphrase, "test-pass")
+	}
+	if c.Address != addr {
+		t.Errorf("Address = %q, want %q", c.Address, addr)
+	}
+}
+
+func TestClobL1AuthSignatureRecoverable(t *testing.T) {
+	// End-to-end test: build L1 headers and verify the signature can be recovered
+	signer, _ := NewOrderSigner(testPrivateKey, Polygon)
+
+	var capturedAddr, capturedSig, capturedTs, capturedNonce string
+
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAddr = r.Header.Get("POLY_ADDRESS")
+		capturedSig = r.Header.Get("POLY_SIGNATURE")
+		capturedTs = r.Header.Get("POLY_TIMESTAMP")
+		capturedNonce = r.Header.Get("POLY_NONCE")
+
+		w.Write([]byte(`{"apiKey":"k","secret":"s","passphrase":"p"}`))
+	}))
+
+	_, err := clob.CreateOrDeriveApiCreds(context.Background(), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the captured signature is recoverable
+	if capturedAddr != signer.Address() {
+		t.Errorf("captured address = %s, want %s", capturedAddr, signer.Address())
+	}
+
+	sigBytes, _ := hex.DecodeString(capturedSig[2:])
+	if len(sigBytes) != 65 {
+		t.Fatalf("sig bytes length = %d, want 65", len(sigBytes))
+	}
+
+	v := sigBytes[64]
+	var r2, s2 [32]byte
+	copy(r2[:], sigBytes[:32])
+	copy(s2[:], sigBytes[32:64])
+
+	digest := clobAuthDigest(capturedAddr, capturedTs, 0, 137)
+	recovered, err := ecRecover(digest[:], r2, s2, v-27)
+	if err != nil {
+		t.Fatalf("ecRecover error: %v", err)
+	}
+	if recovered != signer.Address() {
+		t.Errorf("recovered address = %s, want %s", recovered, signer.Address())
+	}
+
+	if capturedNonce != "0" {
+		t.Errorf("nonce = %s, want 0", capturedNonce)
+	}
 }
 
 func TestClobMarketCursorPageNumericFields(t *testing.T) {

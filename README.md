@@ -143,6 +143,70 @@ client := polymarket.NewClient(
         Address:    os.Getenv("POLY_ADDRESS"),
     }),
 )
+```
+
+## Order Signing (EIP-712)
+
+Placing orders on the CLOB requires EIP-712 typed data signatures. The library includes a complete, zero-dependency implementation of Keccak-256 and secp256k1 ECDSA signing.
+
+### Create and sign an order
+
+```go
+// 1. Create an order signer with your private key
+signer, err := polymarket.NewOrderSigner(
+    os.Getenv("POLY_PRIVATE_KEY"), // hex-encoded secp256k1 private key
+    polymarket.Polygon,            // chain config (Polygon mainnet)
+)
+
+// 2. Build and sign an order in one step
+signed, err := signer.CreateOrder(polymarket.CreateOrderParams{
+    TokenID: "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+    Price:   0.50,    // price per share (0..1)
+    Size:    10.0,    // number of shares
+    Side:    polymarket.Buy,
+})
+
+// 3. Post the signed order via the CLOB client (requires API credentials)
+resp, err := client.Clob.PostOrder(ctx, signed, polymarket.OrderGTC)
+fmt.Printf("Order ID: %s\n", resp.OrderID)
+```
+
+### Advanced: build then sign separately
+
+```go
+// Build the order (unsigned)
+order, err := signer.BuildOrder(polymarket.CreateOrderParams{
+    TokenID:       tokenID,
+    Price:         0.75,
+    Size:          100.0,
+    Side:          polymarket.Sell,
+    FeeRateBPS:    100,           // 1% fee
+    Expiration:    1700000000,    // Unix timestamp
+    NegRisk:       true,          // for neg-risk markets
+    SignatureType: polymarket.SignatureTypePoly, // proxy wallet
+    Maker:         proxyWalletAddr,             // override maker address
+})
+
+// Sign it
+signed, err := signer.SignOrder(order)
+```
+
+### Order types
+
+| Constant | Description |
+|----------|-------------|
+| `OrderGTC` | Good Till Cancelled |
+| `OrderGTD` | Good Till Date |
+| `OrderFOK` | Fill Or Kill |
+| `OrderIOC` | Immediate Or Cancel |
+
+### Signature types
+
+| Constant | Description |
+|----------|-------------|
+| `SignatureTypeEOA` | Direct wallet (externally owned account) |
+| `SignatureTypePoly` | Polymarket proxy wallet |
+| `SignatureTypeGnosisSafe` | Gnosis Safe multisig |
 
 ## API Reference
 
@@ -183,6 +247,7 @@ client.Clob.GetPriceHistory(ctx, PriceHistoryParams{...})   // (*PriceHistoryRes
 client.Clob.GetMarketTradeEvents(ctx, conditionID)          // ([]MarketTradeEvent, error)
 
 // Authenticated — Orders (requires WithCredentials)
+client.Clob.PostOrder(ctx, signedOrder, orderType)           // (*PostOrderResponse, error)
 client.Clob.GetOrder(ctx, orderID)                          // (*Order, error)
 client.Clob.GetOrders(ctx, &OrdersParams{...})              // ([]OpenOrder, error)
 client.Clob.CancelOrder(ctx, orderID)                       // error
@@ -347,6 +412,7 @@ go run ./examples/markets
 - **`StringSlice` unmarshaler** — The Gamma API inconsistently serializes array fields (like `outcomes`) as either a JSON array `["Yes","No"]` or a JSON string `"[\"Yes\",\"No\"]"`. The custom `StringSlice` type handles both transparently.
 - **Pointer fields for optional params** — Query parameter structs use `*int`, `*bool`, etc. to distinguish "not set" from zero values.
 - **Generic cursor pagination** — `CursorPage[T]` and `CursorIterator[T]` eliminate boilerplate across CLOB list endpoints.
+- **Pure-Go EIP-712 signing** — Includes Keccak-256 (pre-NIST) and secp256k1 ECDSA implementations with zero external dependencies. The `OrderSigner` handles the full EIP-712 typed data hashing and signing flow for CLOB order placement.
 
 ## Project Structure
 
@@ -354,10 +420,12 @@ go run ./examples/markets
 polymarket-go/
   client.go          # Client, NewClient, functional options, shared HTTP
   auth.go            # Credentials, HMAC signing, request signing
+  crypto.go          # Keccak-256, secp256k1 curve, ECDSA signing
+  signer.go          # EIP-712 order signing, OrderSigner, ChainConfig
   errors.go          # APIError, IsNotFound, IsRateLimited
   models.go          # Shared types: Side, Interval, TickSize, BookParams
   pagination.go      # CursorPage[T], CursorIterator[T]
-  clob.go            # ClobClient (~28 methods, public + authenticated)
+  clob.go            # ClobClient (~29 methods, public + authenticated)
   clob_models.go     # CLOB request/response types
   gamma.go           # GammaClient (12 methods)
   gamma_models.go    # Gamma types, Number, StringSlice unmarshalers

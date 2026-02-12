@@ -7,7 +7,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// timeNow is a replaceable function for testing timestamp generation.
+var timeNow = time.Now
 
 // ClobClient provides access to the Polymarket CLOB API.
 type ClobClient struct {
@@ -333,13 +337,14 @@ type bookParamEntry struct {
 // GetOrder retrieves a single order by ID. Requires authentication.
 func (c *ClobClient) GetOrder(ctx context.Context, orderID string) (*Order, error) {
 	var o Order
-	if err := c.base.get(ctx, c.baseURL, "/order/"+orderID, nil, &o); err != nil {
+	if err := c.base.get(ctx, c.baseURL, "/data/order/"+orderID, nil, &o); err != nil {
 		return nil, err
 	}
 	return &o, nil
 }
 
 // GetOrders returns the authenticated user's orders. Requires authentication.
+// Automatically paginates through all results.
 func (c *ClobClient) GetOrders(ctx context.Context, p *OrdersParams) ([]OpenOrder, error) {
 	params := url.Values{}
 	if p != nil {
@@ -351,16 +356,29 @@ func (c *ClobClient) GetOrders(ctx context.Context, p *OrdersParams) ([]OpenOrde
 		}
 	}
 
-	body, err := c.base.getRaw(ctx, c.baseURL, "/orders", params)
-	if err != nil {
-		return nil, err
-	}
+	var all []OpenOrder
+	cursor := "MA=="
+	for cursor != "LTE=" {
+		params.Set("next_cursor", cursor)
+		body, err := c.base.getRaw(ctx, c.baseURL, "/data/orders", params)
+		if err != nil {
+			return nil, err
+		}
 
-	var orders []OpenOrder
-	if err := json.Unmarshal(body, &orders); err != nil {
-		return nil, fmt.Errorf("polymarket: decoding orders: %w", err)
+		var page struct {
+			Data       []OpenOrder `json:"data"`
+			NextCursor string      `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("polymarket: decoding orders: %w", err)
+		}
+		all = append(all, page.Data...)
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
 	}
-	return orders, nil
+	return all, nil
 }
 
 // CancelOrder cancels a single order by ID. Requires authentication.
@@ -400,6 +418,7 @@ func (c *ClobClient) CancelAll(ctx context.Context) ([]string, error) {
 }
 
 // GetTrades returns the authenticated user's trades. Requires authentication.
+// Automatically paginates through all results.
 func (c *ClobClient) GetTrades(ctx context.Context, p *ClobTradesParams) ([]UserTrade, error) {
 	params := url.Values{}
 	if p != nil {
@@ -411,16 +430,29 @@ func (c *ClobClient) GetTrades(ctx context.Context, p *ClobTradesParams) ([]User
 		}
 	}
 
-	body, err := c.base.getRaw(ctx, c.baseURL, "/trades", params)
-	if err != nil {
-		return nil, err
-	}
+	var all []UserTrade
+	cursor := "MA=="
+	for cursor != "LTE=" {
+		params.Set("next_cursor", cursor)
+		body, err := c.base.getRaw(ctx, c.baseURL, "/data/trades", params)
+		if err != nil {
+			return nil, err
+		}
 
-	var trades []UserTrade
-	if err := json.Unmarshal(body, &trades); err != nil {
-		return nil, fmt.Errorf("polymarket: decoding trades: %w", err)
+		var page struct {
+			Data       []UserTrade `json:"data"`
+			NextCursor string      `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("polymarket: decoding trades: %w", err)
+		}
+		all = append(all, page.Data...)
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
 	}
-	return trades, nil
+	return all, nil
 }
 
 // GetBalanceAllowance returns the user's balance and allowance. Requires authentication.
@@ -429,6 +461,12 @@ func (c *ClobClient) GetBalanceAllowance(ctx context.Context, p *BalanceParams) 
 	if p != nil {
 		if p.AssetType != nil {
 			params.Set("asset_type", *p.AssetType)
+		}
+		if p.TokenID != nil {
+			params.Set("token_id", *p.TokenID)
+		}
+		if p.SignatureType != nil {
+			params.Set("signature_type", strconv.Itoa(*p.SignatureType))
 		}
 	}
 
@@ -446,6 +484,138 @@ func (c *ClobClient) GetNotifications(ctx context.Context) ([]Notification, erro
 		return nil, err
 	}
 	return notifications, nil
+}
+
+// ---- L1 API Key Management ----
+//
+// These methods use L1 (EIP-712) authentication via the OrderSigner to manage
+// API credentials. The returned credentials can be used for L2 (HMAC) authentication
+// on subsequent requests (orders, trades, balances, etc.).
+//
+// Mirrors the Python client's create_or_derive_api_creds() pattern:
+//   client = ClobClient(host, key=private_key, chain_id=chain_id)
+//   api_creds = client.create_or_derive_api_creds()
+//   client.set_api_creds(api_creds)
+
+// CreateOrDeriveApiCreds creates or derives API credentials using L1 (EIP-712) authentication.
+// If credentials already exist for the signer's address, they are returned (derived).
+// If not, new credentials are created.
+//
+// This is the primary method for obtaining API credentials from a private key.
+// It mirrors the Python/TypeScript client's create_or_derive_api_creds() / createOrDeriveApiKey().
+//
+// Usage:
+//
+//	signer, _ := polymarket.NewOrderSigner(privateKey, polymarket.Polygon)
+//	creds, _ := client.Clob.CreateOrDeriveApiCreds(ctx, signer)
+//	// Re-create client with L2 credentials:
+//	authedClient := polymarket.NewClient(polymarket.WithCredentials(creds.ToCredentials(signer.Address())))
+func (c *ClobClient) CreateOrDeriveApiCreds(ctx context.Context, signer *OrderSigner) (*ApiCredentials, error) {
+	// Try to create a new key first (POST).
+	creds, err := c.CreateApiKey(ctx, signer)
+	if err == nil {
+		return creds, nil
+	}
+	// If create failed (e.g. key already exists), derive the existing one.
+	return c.DeriveApiKey(ctx, signer)
+}
+
+// CreateApiKey creates a new API key using L1 (EIP-712) authentication.
+// Unlike CreateOrDeriveApiCreds, this always creates a new key even if one already exists.
+func (c *ClobClient) CreateApiKey(ctx context.Context, signer *OrderSigner) (*ApiCredentials, error) {
+	l1, err := signer.BuildL1AuthHeaders(
+		strconv.FormatInt(timeNow().Unix(), 10),
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: building L1 auth headers: %w", err)
+	}
+
+	var creds ApiCredentials
+	if err := c.base.postL1(ctx, c.baseURL, "/auth/api-key", nil, l1, &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
+}
+
+// DeriveApiKey derives (retrieves) an existing API key using L1 (EIP-712) authentication.
+// Returns an error if no key exists for the signer's address.
+func (c *ClobClient) DeriveApiKey(ctx context.Context, signer *OrderSigner) (*ApiCredentials, error) {
+	l1, err := signer.BuildL1AuthHeaders(
+		strconv.FormatInt(timeNow().Unix(), 10),
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: building L1 auth headers: %w", err)
+	}
+
+	var creds ApiCredentials
+	if err := c.base.getL1(ctx, c.baseURL, "/auth/derive-api-key", nil, l1, &creds); err != nil {
+		return nil, err
+	}
+	return &creds, nil
+}
+
+// GetApiKeys returns all API keys for the authenticated user's address.
+// Requires L2 (HMAC) authentication.
+func (c *ClobClient) GetApiKeys(ctx context.Context) ([]string, error) {
+	body, err := c.base.getRaw(ctx, c.baseURL, "/auth/api-keys", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// API returns {"apiKeys":["key-id-1","key-id-2",...]}.
+	var resp struct {
+		ApiKeys []string `json:"apiKeys"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("polymarket: decoding api-keys: %w", err)
+	}
+	return resp.ApiKeys, nil
+}
+
+// DeleteApiKey deletes the authenticated user's API key.
+// Requires L2 (HMAC) authentication.
+func (c *ClobClient) DeleteApiKey(ctx context.Context) error {
+	_, err := c.base.deleteRaw(ctx, c.baseURL, "/auth/api-key", nil)
+	return err
+}
+
+// PostOrder submits a signed order to the CLOB. Requires authentication.
+//
+// The order must be signed using an OrderSigner with the correct EIP-712 signature.
+// The orderType controls time-in-force behavior (GTC, GTD, FOK, IOC).
+func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderType OrderType) (*PostOrderResponse, error) {
+	if c.base.creds == nil {
+		return nil, fmt.Errorf("polymarket: PostOrder requires authentication (use WithCredentials)")
+	}
+
+	req := postOrderRequest{
+		Order: postOrderJSON{
+			Salt:          json.Number(signed.Order.Salt.String()), // bare JSON number, matching Python client
+			Maker:         signed.Order.Maker,
+			Signer:        signed.Order.Signer,
+			Taker:         signed.Order.Taker,
+			TokenID:       signed.Order.TokenID.String(),
+			MakerAmount:   signed.Order.MakerAmount.String(),
+			TakerAmount:   signed.Order.TakerAmount.String(),
+			Expiration:    signed.Order.Expiration.String(),
+			Nonce:         signed.Order.Nonce.String(),
+			FeeRateBPS:    signed.Order.FeeRateBPS.String(),
+			Side:          string(signed.Order.Side),
+			SignatureType: int(signed.Order.SignatureType),
+			Signature:     signed.Signature,
+		},
+		Owner:     c.base.creds.Key, // API key, not wallet address (matches Python client)
+		OrderType: string(orderType),
+		PostOnly:  false,
+	}
+
+	var resp PostOrderResponse
+	if err := c.base.postJSON(ctx, c.baseURL, "/order", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 func buildBookParamsPayload(params []BookParams) []bookParamEntry {

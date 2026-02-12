@@ -244,6 +244,67 @@ func (b *baseClient) do(req *http.Request, out any) error {
 	return nil
 }
 
+// setL1Headers injects L1 (EIP-712) authentication headers onto an http.Request.
+// These are used instead of L2 (HMAC) headers for API key management endpoints.
+func setL1Headers(req *http.Request, l1 *L1AuthHeaders) {
+	req.Header.Set("POLY_ADDRESS", l1.Address)
+	req.Header.Set("POLY_SIGNATURE", l1.Signature)
+	req.Header.Set("POLY_TIMESTAMP", l1.Timestamp)
+	req.Header.Set("POLY_NONCE", l1.Nonce)
+}
+
+func (b *baseClient) getL1(ctx context.Context, baseURL, path string, params url.Values, l1 *L1AuthHeaders, out any) error {
+	u := baseURL + path
+	if len(params) > 0 {
+		u += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return fmt.Errorf("polymarket: creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	setL1Headers(req, l1)
+
+	return b.do(req, out)
+}
+
+func (b *baseClient) postL1(ctx context.Context, baseURL, path string, payload any, l1 *L1AuthHeaders, out any) error {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("polymarket: encoding request body: %w", err)
+		}
+		body = bytes.NewReader(data)
+	}
+
+	u := baseURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
+	if err != nil {
+		return fmt.Errorf("polymarket: creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	setL1Headers(req, l1)
+
+	return b.do(req, out)
+}
+
+func (b *baseClient) deleteL1(ctx context.Context, baseURL, path string, l1 *L1AuthHeaders) error {
+	u := baseURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("polymarket: creating request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	setL1Headers(req, l1)
+
+	return b.do(req, nil)
+}
+
 func (b *baseClient) deleteRaw(ctx context.Context, baseURL, path string, payload any) ([]byte, error) {
 	var data []byte
 	var err error

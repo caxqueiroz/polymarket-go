@@ -36,15 +36,12 @@ func hmacSign(secret, timestamp, method, requestPath, body string) (string, erro
 }
 
 // signRequest injects the 5 POLY_* authentication headers onto an http.Request.
+// Note: the HMAC message uses only the URL path — query parameters are NOT included
+// in the signature, matching the behaviour of the Python and TypeScript clients.
 func signRequest(req *http.Request, creds *Credentials, body string) error {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 
-	requestPath := req.URL.Path
-	if req.URL.RawQuery != "" {
-		requestPath += "?" + req.URL.RawQuery
-	}
-
-	sig, err := hmacSign(creds.Secret, timestamp, req.Method, requestPath, body)
+	sig, err := hmacSign(creds.Secret, timestamp, req.Method, req.URL.Path, body)
 	if err != nil {
 		return err
 	}
