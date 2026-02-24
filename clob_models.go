@@ -1,5 +1,7 @@
 package polymarket
 
+import "encoding/json"
+
 // ClobMarket represents a market returned by the CLOB API.
 type ClobMarket struct {
 	ConditionID              string    `json:"condition_id"`
@@ -249,10 +251,72 @@ type ClobTradesParams struct {
 
 // BalanceParams holds parameters for the GetBalanceAllowance endpoint.
 type BalanceParams struct {
-	AssetType *string
+	AssetType     *string
+	TokenID       *string
+	SignatureType *int
 }
 
 // CancelOrdersPayload is the request body for canceling multiple orders.
 type CancelOrdersPayload struct {
 	OrderIDs []string `json:"ids"`
+}
+
+// postOrderJSON is the JSON representation of a signed order for the POST /order endpoint.
+// Field types match the Python client (py-order-utils SignedOrder.dict()):
+//   - salt and signatureType are JSON numbers (bare integers)
+//   - tokenId, makerAmount, takerAmount, expiration, nonce, feeRateBps are strings
+//   - side is "BUY" or "SELL"
+type postOrderJSON struct {
+	Salt          json.Number `json:"salt"`
+	Maker         string      `json:"maker"`
+	Signer        string      `json:"signer"`
+	Taker         string      `json:"taker"`
+	TokenID       string      `json:"tokenId"`
+	MakerAmount   string      `json:"makerAmount"`
+	TakerAmount   string      `json:"takerAmount"`
+	Expiration    string      `json:"expiration"`
+	Nonce         string      `json:"nonce"`
+	FeeRateBPS    string      `json:"feeRateBps"`
+	Side          string      `json:"side"`
+	SignatureType int         `json:"signatureType"`
+	Signature     string      `json:"signature"`
+}
+
+// postOrderRequest is the request body for POST /order.
+// The Owner field must be set to the API key (not the wallet address),
+// matching the Python client: order_to_json(order, self.creds.api_key, ...).
+type postOrderRequest struct {
+	Order     postOrderJSON `json:"order"`
+	Owner     string        `json:"owner"`
+	OrderType string        `json:"orderType"`
+	PostOnly  bool          `json:"postOnly"`
+}
+
+// PostOrderResponse is the response from the POST /order endpoint.
+type PostOrderResponse struct {
+	Success            bool     `json:"success"`
+	ErrorMsg           string   `json:"errorMsg"`
+	OrderID            string   `json:"orderID"`
+	TransactionHashes  []string `json:"transactionsHashes"`
+}
+
+// ApiCredentials holds API key credentials returned by the CLOB API key endpoints.
+// These are L2 credentials used for HMAC authentication on subsequent requests.
+//
+// Use ClobClient.CreateOrDeriveApiCreds to obtain these from a private key.
+type ApiCredentials struct {
+	ApiKey     string `json:"apiKey"`
+	Secret     string `json:"secret"`
+	Passphrase string `json:"passphrase"`
+}
+
+// ToCredentials converts ApiCredentials to a Credentials struct suitable for
+// passing to WithCredentials. You must provide the wallet address separately.
+func (a *ApiCredentials) ToCredentials(address string) *Credentials {
+	return &Credentials{
+		Key:        a.ApiKey,
+		Secret:     a.Secret,
+		Passphrase: a.Passphrase,
+		Address:    address,
+	}
 }

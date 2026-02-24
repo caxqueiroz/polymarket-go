@@ -123,15 +123,16 @@ func TestSignRequestWithBody(t *testing.T) {
 	}
 }
 
-func TestSignRequestQueryString(t *testing.T) {
+func TestSignRequestQueryStringIgnored(t *testing.T) {
 	req1, _ := http.NewRequest("GET", "https://clob.polymarket.com/orders?market=0xabc", nil)
 	req2, _ := http.NewRequest("GET", "https://clob.polymarket.com/orders", nil)
 
 	signRequest(req1, testCreds, "")
 	signRequest(req2, testCreds, "")
 
-	// Query string is part of the signed path, so signatures should differ.
-	if req1.Header.Get("POLY_SIGNATURE") == req2.Header.Get("POLY_SIGNATURE") {
-		t.Error("query string should affect signature")
+	// Query string is NOT part of the HMAC message (matching the Python/TS SDKs),
+	// so both requests with the same path should produce the same signature.
+	if req1.Header.Get("POLY_SIGNATURE") != req2.Header.Get("POLY_SIGNATURE") {
+		t.Error("query string should not affect signature (only path is signed)")
 	}
 }
