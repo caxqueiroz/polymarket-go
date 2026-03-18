@@ -1196,6 +1196,61 @@ func TestPostOrderWithBuilderHeaders(t *testing.T) {
 	}
 }
 
+func TestClobGetBuilderTrades(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/builder-trades" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method: %s", r.Method)
+		}
+		requireAuthHeaders(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":"trade-1","market":"0xabc","side":"BUY","size":"10","price":"0.55","status":"MATCHED"}]`))
+	}))
+
+	trades, err := clob.GetBuilderTrades(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("GetBuilderTrades() error: %v", err)
+	}
+	if len(trades) != 1 {
+		t.Fatalf("expected 1 trade, got %d", len(trades))
+	}
+	if trades[0].ID != "trade-1" {
+		t.Errorf("trade ID = %q, want %q", trades[0].ID, "trade-1")
+	}
+}
+
+func TestClobGetBuilderTradesWithMarket(t *testing.T) {
+	market := "0xabc"
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("market"); got != market {
+			t.Errorf("market param = %q, want %q", got, market)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	}))
+
+	trades, err := clob.GetBuilderTrades(context.Background(), &market)
+	if err != nil {
+		t.Fatalf("GetBuilderTrades() error: %v", err)
+	}
+	if len(trades) != 0 {
+		t.Errorf("expected 0 trades, got %d", len(trades))
+	}
+}
+
+func TestClobGetBuilderTradesRequiresAuth(t *testing.T) {
+	clob := newTestClobClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not reach server")
+	}))
+
+	_, err := clob.GetBuilderTrades(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for unauthenticated request")
+	}
+}
+
 func TestPostOrderWithoutBuilderHeaders(t *testing.T) {
 	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requireAuthHeaders(t, r)
