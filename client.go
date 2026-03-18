@@ -181,6 +181,12 @@ func (b *baseClient) postJSON(ctx context.Context, baseURL, path string, payload
 		}
 	}
 
+	if b.builderCreds != nil {
+		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
+			return err
+		}
+	}
+
 	return b.do(req, out)
 }
 
@@ -200,6 +206,12 @@ func (b *baseClient) postJSONRaw(ctx context.Context, baseURL, path string, payl
 
 	if b.creds != nil {
 		if err := signRequest(req, b.creds, string(data)); err != nil {
+			return nil, err
+		}
+	}
+
+	if b.builderCreds != nil {
+		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
 			return nil, err
 		}
 	}
@@ -343,6 +355,12 @@ func (b *baseClient) deleteRaw(ctx context.Context, baseURL, path string, payloa
 
 	if b.creds != nil {
 		if err := signRequest(req, b.creds, string(data)); err != nil {
+			return nil, err
+		}
+	}
+
+	if b.builderCreds != nil {
+		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
 			return nil, err
 		}
 	}

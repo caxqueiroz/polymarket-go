@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -1125,5 +1126,90 @@ func TestClobMarketCursorPageNumericFields(t *testing.T) {
 	}
 	if string(page.Data[0].MinimumOrderSize) != "15" {
 		t.Errorf("MinimumOrderSize = %q, want %q", string(page.Data[0].MinimumOrderSize), "15")
+	}
+}
+
+func newTestClobClientAuthWithBuilder(handler http.Handler) *ClobClient {
+	srv := httptest.NewServer(handler)
+	c := NewClient(
+		WithHTTPClient(srv.Client()),
+		WithClobBaseURL(srv.URL),
+		WithCredentials(testCreds),
+		WithBuilderCredentials(testBuilderCreds),
+	)
+	return c.Clob
+}
+
+func requireBuilderHeaders(t *testing.T, r *http.Request) {
+	t.Helper()
+	for _, h := range []string{"POLY_BUILDER_API_KEY", "POLY_BUILDER_SIGNATURE", "POLY_BUILDER_TIMESTAMP", "POLY_BUILDER_PASSPHRASE"} {
+		if r.Header.Get(h) == "" {
+			t.Errorf("missing builder header %s", h)
+		}
+	}
+}
+
+func requireNoBuilderHeaders(t *testing.T, r *http.Request) {
+	t.Helper()
+	for _, h := range []string{"POLY_BUILDER_API_KEY", "POLY_BUILDER_SIGNATURE", "POLY_BUILDER_TIMESTAMP", "POLY_BUILDER_PASSPHRASE"} {
+		if r.Header.Get(h) != "" {
+			t.Errorf("unexpected builder header %s = %q", h, r.Header.Get(h))
+		}
+	}
+}
+
+func makeTestOrder() OrderData {
+	return OrderData{
+		Salt:          big.NewInt(123),
+		Maker:         "0xMaker",
+		Signer:        "0xSigner",
+		Taker:         "0x0000000000000000000000000000000000000000",
+		TokenID:       big.NewInt(456),
+		MakerAmount:   big.NewInt(100),
+		TakerAmount:   big.NewInt(50),
+		Expiration:    big.NewInt(0),
+		Nonce:         big.NewInt(0),
+		FeeRateBPS:    big.NewInt(0),
+		Side:          Buy,
+		SignatureType: SignatureTypeEOA,
+	}
+}
+
+func TestPostOrderWithBuilderHeaders(t *testing.T) {
+	clob := newTestClobClientAuthWithBuilder(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		requireBuilderHeaders(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"orderID":"order-123"}`))
+	}))
+
+	signed := &SignedOrder{
+		Order:     makeTestOrder(),
+		Signature: "0xdeadbeef",
+	}
+	resp, err := clob.PostOrder(context.Background(), signed, OrderGTC)
+	if err != nil {
+		t.Fatalf("PostOrder() error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success")
+	}
+}
+
+func TestPostOrderWithoutBuilderHeaders(t *testing.T) {
+	clob := newTestClobClientAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requireAuthHeaders(t, r)
+		requireNoBuilderHeaders(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"orderID":"order-456"}`))
+	}))
+
+	signed := &SignedOrder{
+		Order:     makeTestOrder(),
+		Signature: "0xdeadbeef",
+	}
+	_, err := clob.PostOrder(context.Background(), signed, OrderGTC)
+	if err != nil {
+		t.Fatalf("PostOrder() error: %v", err)
 	}
 }
