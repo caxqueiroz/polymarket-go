@@ -618,6 +618,25 @@ func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderTy
 	return &resp, nil
 }
 
+// GetBuilderTrades returns trades attributed to the builder account.
+// Requires authentication. Optionally filter by market condition ID.
+func (c *ClobClient) GetBuilderTrades(ctx context.Context, market *string) ([]UserTrade, error) {
+	if c.base.creds == nil {
+		return nil, fmt.Errorf("polymarket: GetBuilderTrades requires authentication (use WithCredentials)")
+	}
+
+	params := url.Values{}
+	if market != nil {
+		params.Set("market", *market)
+	}
+
+	var trades []UserTrade
+	if err := c.base.get(ctx, c.baseURL, "/builder-trades", params, &trades); err != nil {
+		return nil, err
+	}
+	return trades, nil
+}
+
 func buildBookParamsPayload(params []BookParams) []bookParamEntry {
 	entries := make([]bookParamEntry, len(params))
 	for i, p := range params {

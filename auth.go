@@ -18,6 +18,15 @@ type Credentials struct {
 	Address    string // Wallet address (hex, e.g. "0x...")
 }
 
+// BuilderCredentials holds builder API key credentials for order attribution.
+// These are separate from user API credentials — builder credentials attribute
+// trading volume to the builder account for tracking and rewards.
+type BuilderCredentials struct {
+	Key        string // Builder API key (UUID)
+	Secret     string // Base64url-encoded HMAC secret
+	Passphrase string // Builder passphrase
+}
+
 // hmacSign computes the POLY_SIGNATURE for a request.
 // message = timestamp + method + requestPath [+ body]
 func hmacSign(secret, timestamp, method, requestPath, body string) (string, error) {
@@ -51,6 +60,25 @@ func signRequest(req *http.Request, creds *Credentials, body string) error {
 	req.Header.Set("POLY_TIMESTAMP", timestamp)
 	req.Header.Set("POLY_PASSPHRASE", creds.Passphrase)
 	req.Header.Set("POLY_ADDRESS", creds.Address)
+
+	return nil
+}
+
+// signBuilderRequest injects the 4 POLY_BUILDER_* attribution headers onto an http.Request.
+// The HMAC signature uses the same algorithm as signRequest: HMAC-SHA256 over
+// timestamp + method + path + body, with base64url encoding.
+func signBuilderRequest(req *http.Request, creds *BuilderCredentials, body string) error {
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+
+	sig, err := hmacSign(creds.Secret, timestamp, req.Method, req.URL.Path, body)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("POLY_BUILDER_API_KEY", creds.Key)
+	req.Header.Set("POLY_BUILDER_SIGNATURE", sig)
+	req.Header.Set("POLY_BUILDER_TIMESTAMP", timestamp)
+	req.Header.Set("POLY_BUILDER_PASSPHRASE", creds.Passphrase)
 
 	return nil
 }

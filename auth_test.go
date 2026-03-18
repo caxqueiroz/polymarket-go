@@ -136,3 +136,89 @@ func TestSignRequestQueryStringIgnored(t *testing.T) {
 		t.Error("query string should not affect signature (only path is signed)")
 	}
 }
+
+var testBuilderSecret = base64.URLEncoding.EncodeToString([]byte("test-builder-secret-1234"))
+
+var testBuilderCreds = &BuilderCredentials{
+	Key:        "test-builder-key",
+	Secret:     testBuilderSecret,
+	Passphrase: "test-builder-passphrase",
+}
+
+func TestSignBuilderRequest(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://clob.polymarket.com/order", nil)
+
+	if err := signBuilderRequest(req, testBuilderCreds, `{"size":"10"}`); err != nil {
+		t.Fatalf("signBuilderRequest() error: %v", err)
+	}
+
+	headers := []string{"POLY_BUILDER_API_KEY", "POLY_BUILDER_SIGNATURE", "POLY_BUILDER_TIMESTAMP", "POLY_BUILDER_PASSPHRASE"}
+	for _, h := range headers {
+		if req.Header.Get(h) == "" {
+			t.Errorf("header %s is empty", h)
+		}
+	}
+
+	if req.Header.Get("POLY_BUILDER_API_KEY") != "test-builder-key" {
+		t.Errorf("POLY_BUILDER_API_KEY = %q, want %q", req.Header.Get("POLY_BUILDER_API_KEY"), "test-builder-key")
+	}
+	if req.Header.Get("POLY_BUILDER_PASSPHRASE") != "test-builder-passphrase" {
+		t.Errorf("POLY_BUILDER_PASSPHRASE = %q, want %q", req.Header.Get("POLY_BUILDER_PASSPHRASE"), "test-builder-passphrase")
+	}
+}
+
+func TestSignBuilderRequestNoAddress(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://clob.polymarket.com/order", nil)
+
+	if err := signBuilderRequest(req, testBuilderCreds, ""); err != nil {
+		t.Fatalf("signBuilderRequest() error: %v", err)
+	}
+
+	if req.Header.Get("POLY_ADDRESS") != "" {
+		t.Error("builder signing should not set POLY_ADDRESS")
+	}
+}
+
+func TestSignBuilderRequestSignatureMatchesHmac(t *testing.T) {
+	req, _ := http.NewRequest("POST", "https://clob.polymarket.com/order", nil)
+	body := `{"token_id":"123"}`
+
+	if err := signBuilderRequest(req, testBuilderCreds, body); err != nil {
+		t.Fatalf("signBuilderRequest() error: %v", err)
+	}
+
+	ts := req.Header.Get("POLY_BUILDER_TIMESTAMP")
+	expectedSig, err := hmacSign(testBuilderSecret, ts, "POST", "/order", body)
+	if err != nil {
+		t.Fatalf("hmacSign() error: %v", err)
+	}
+
+	if got := req.Header.Get("POLY_BUILDER_SIGNATURE"); got != expectedSig {
+		t.Errorf("POLY_BUILDER_SIGNATURE = %q, want %q", got, expectedSig)
+	}
+}
+
+func TestWithBuilderCredentials(t *testing.T) {
+	c := NewClient(
+		WithBuilderCredentials(&BuilderCredentials{
+			Key:        "builder-key",
+			Secret:     testBuilderSecret,
+			Passphrase: "builder-pass",
+		}),
+	)
+
+	if c.Clob.base.builderCreds == nil {
+		t.Fatal("builderCreds not propagated to ClobClient.base")
+	}
+	if c.Clob.base.builderCreds.Key != "builder-key" {
+		t.Errorf("builderCreds.Key = %q, want %q", c.Clob.base.builderCreds.Key, "builder-key")
+	}
+}
+
+func TestWithoutBuilderCredentials(t *testing.T) {
+	c := NewClient()
+
+	if c.Clob.base.builderCreds != nil {
+		t.Error("builderCreds should be nil when not configured")
+	}
+}
