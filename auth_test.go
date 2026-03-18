@@ -197,3 +197,28 @@ func TestSignBuilderRequestSignatureMatchesHmac(t *testing.T) {
 		t.Errorf("POLY_BUILDER_SIGNATURE = %q, want %q", got, expectedSig)
 	}
 }
+
+func TestWithBuilderCredentials(t *testing.T) {
+	c := NewClient(
+		WithBuilderCredentials(&BuilderCredentials{
+			Key:        "builder-key",
+			Secret:     testBuilderSecret,
+			Passphrase: "builder-pass",
+		}),
+	)
+
+	if c.Clob.base.builderCreds == nil {
+		t.Fatal("builderCreds not propagated to ClobClient.base")
+	}
+	if c.Clob.base.builderCreds.Key != "builder-key" {
+		t.Errorf("builderCreds.Key = %q, want %q", c.Clob.base.builderCreds.Key, "builder-key")
+	}
+}
+
+func TestWithoutBuilderCredentials(t *testing.T) {
+	c := NewClient()
+
+	if c.Clob.base.builderCreds != nil {
+		t.Error("builderCreds should be nil when not configured")
+	}
+}
