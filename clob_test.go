@@ -672,9 +672,17 @@ func TestClobCancelOrder(t *testing.T) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("method = %q, want DELETE", r.Method)
 		}
-		if r.URL.Path != "/order/order-456" {
+		if r.URL.Path != "/order" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
+
+		body, _ := io.ReadAll(r.Body)
+		var payload CancelOrderPayload
+		json.Unmarshal(body, &payload)
+		if payload.ID != "order-456" {
+			t.Errorf("payload.ID = %q, want %q", payload.ID, "order-456")
+		}
+
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -700,7 +708,10 @@ func TestClobCancelOrders(t *testing.T) {
 			t.Errorf("len(OrderIDs) = %d, want 2", len(payload.OrderIDs))
 		}
 
-		json.NewEncoder(w).Encode([]string{"o1", "o2"})
+		json.NewEncoder(w).Encode(map[string]any{
+			"canceled":     []string{"o1", "o2"},
+			"not_canceled": map[string]any{},
+		})
 	}))
 
 	got, err := clob.CancelOrders(context.Background(), []string{"o1", "o2"})
@@ -721,7 +732,10 @@ func TestClobCancelAll(t *testing.T) {
 		if r.URL.Path != "/cancel-all" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]string{"o1", "o2", "o3"})
+		json.NewEncoder(w).Encode(map[string]any{
+			"canceled":     []string{"o1", "o2", "o3"},
+			"not_canceled": map[string]any{},
+		})
 	}))
 
 	got, err := clob.CancelAll(context.Background())

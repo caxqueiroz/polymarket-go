@@ -182,7 +182,7 @@ type Order struct {
 	Status          string `json:"status"`
 	ExpirationTime  string `json:"expiration"`
 	Type            string `json:"type"`
-	CreatedAt       string `json:"created_at"`
+	CreatedAt       json.Number `json:"created_at"`
 	AssociateTradeIDs []string `json:"associate_trades"`
 }
 
@@ -199,8 +199,8 @@ type OpenOrder struct {
 	Owner           string `json:"owner"`
 	Status          string `json:"status"`
 	ExpirationTime  string `json:"expiration"`
-	Type            string `json:"type"`
-	CreatedAt       string `json:"created_at"`
+	Type            string      `json:"type"`
+	CreatedAt       json.Number `json:"created_at"`
 }
 
 // UserTrade represents a trade in the authenticated user's trade history.
@@ -221,7 +221,7 @@ type UserTrade struct {
 	TransactionHash string `json:"transaction_hash"`
 	BucketIndex    int    `json:"bucket_index"`
 	Type           string `json:"type"`
-	CreatedAt      string `json:"created_at"`
+	CreatedAt      json.Number `json:"created_at"`
 }
 
 // BalanceAllowance holds a user's balance and allowance information.
@@ -256,9 +256,20 @@ type BalanceParams struct {
 	SignatureType *int
 }
 
+// CancelOrderPayload is the request body for canceling a single order.
+type CancelOrderPayload struct {
+	ID string `json:"id"`
+}
+
 // CancelOrdersPayload is the request body for canceling multiple orders.
 type CancelOrdersPayload struct {
 	OrderIDs []string `json:"ids"`
+}
+
+// cancelResponse is the response body returned by the cancel endpoints.
+type cancelResponse struct {
+	Canceled    []string `json:"canceled"`
+	NotCanceled map[string]any `json:"not_canceled"`
 }
 
 // postOrderJSON is the JSON representation of a signed order for the POST /order endpoint.

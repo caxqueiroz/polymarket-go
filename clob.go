@@ -383,7 +383,7 @@ func (c *ClobClient) GetOrders(ctx context.Context, p *OrdersParams) ([]OpenOrde
 
 // CancelOrder cancels a single order by ID. Requires authentication.
 func (c *ClobClient) CancelOrder(ctx context.Context, orderID string) error {
-	_, err := c.base.deleteRaw(ctx, c.baseURL, "/order/"+orderID, nil)
+	_, err := c.base.deleteRaw(ctx, c.baseURL, "/order", CancelOrderPayload{ID: orderID})
 	return err
 }
 
@@ -395,11 +395,11 @@ func (c *ClobClient) CancelOrders(ctx context.Context, orderIDs []string) ([]str
 		return nil, err
 	}
 
-	var canceled []string
-	if err := json.Unmarshal(body, &canceled); err != nil {
+	var resp cancelResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("polymarket: decoding cancel response: %w", err)
 	}
-	return canceled, nil
+	return resp.Canceled, nil
 }
 
 // CancelAll cancels all open orders. Returns the IDs of canceled orders.
@@ -410,11 +410,11 @@ func (c *ClobClient) CancelAll(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	var canceled []string
-	if err := json.Unmarshal(body, &canceled); err != nil {
+	var resp cancelResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("polymarket: decoding cancel-all response: %w", err)
 	}
-	return canceled, nil
+	return resp.Canceled, nil
 }
 
 // GetTrades returns the authenticated user's trades. Requires authentication.
