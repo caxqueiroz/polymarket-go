@@ -39,6 +39,21 @@ func (g *GammaClient) GetMarketByID(ctx context.Context, id string) (*GammaMarke
 	return &markets[0], nil
 }
 
+// GetMarketByConditionID retrieves a single market by its on-chain condition ID.
+func (g *GammaClient) GetMarketByConditionID(ctx context.Context, conditionID string) (*GammaMarket, error) {
+	params := url.Values{}
+	params.Set("condition_id", conditionID)
+
+	var markets []GammaMarket
+	if err := g.base.get(ctx, g.baseURL, "/markets", params, &markets); err != nil {
+		return nil, err
+	}
+	if len(markets) == 0 {
+		return nil, &APIError{StatusCode: 404, Status: "404 Not Found", Body: "market not found"}
+	}
+	return &markets[0], nil
+}
+
 // GetMarketBySlug retrieves a single market by its slug.
 func (g *GammaClient) GetMarketBySlug(ctx context.Context, slug string) (*GammaMarket, error) {
 	params := url.Values{}
