@@ -10,6 +10,7 @@ import (
 type GammaMarket struct {
 	ID                string      `json:"id"`
 	Question          string      `json:"question"`
+	GroupItemTitle    string      `json:"groupItemTitle"`
 	ConditionID       string      `json:"conditionId"`
 	Slug              string      `json:"slug"`
 	EndDate           string      `json:"endDate"`
