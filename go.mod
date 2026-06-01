@@ -1,3 +1,3 @@
-module polymarket-go
+module github.com/caxqueiroz/polymarket-go
 
 go 1.25

@@ -18,7 +18,7 @@ import (
 	"log"
 	"os"
 
-	polymarket "polymarket-go"
+	polymarket "github.com/caxqueiroz/polymarket-go"
 )
 
 func main() {
