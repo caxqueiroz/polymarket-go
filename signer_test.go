@@ -418,15 +418,14 @@ func TestEIP712TypeHashes(t *testing.T) {
 		t.Error("domain name hash mismatch")
 	}
 
-	versionHash := keccak256([]byte("1"))
+	versionHash := keccak256([]byte("2"))
 	if versionHash != eip712DomainVersion {
 		t.Error("domain version hash mismatch")
 	}
 
-	orderType := "Order(uint256 salt,address maker,address signer,address taker," +
+	orderType := "Order(uint256 salt,address maker,address signer," +
 		"uint256 tokenId,uint256 makerAmount,uint256 takerAmount," +
-		"uint256 expiration,uint256 nonce,uint256 feeRateBps," +
-		"uint8 side,uint8 signatureType)"
+		"uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)"
 	got = keccak256([]byte(orderType))
 	if got != orderTypeHash {
 		t.Error("order type hash mismatch")

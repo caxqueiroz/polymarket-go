@@ -7,10 +7,41 @@ A Go client library for the [Polymarket](https://polymarket.com) APIs. Provides 
 ## Installation
 
 ```bash
-go get polymarket-go
+go get github.com/caxqueiroz/polymarket-go
 ```
 
 Requires **Go 1.25** or later.
+
+## CLOB V2 migration
+
+Order signing and submission use the [official CLOB V2 protocol](https://github.com/Polymarket/clob-client-v2). The API base URL remains `https://clob.polymarket.com`.
+
+- The Polygon exchange addresses and order-signing domain use V2. L1 credential authentication still uses its original domain.
+- Signed orders include a millisecond `Timestamp`, `Metadata`, and `Builder`. Empty metadata/builder values become zero bytes32; custom values must be 32-byte hex strings. Expiration remains in the HTTP payload but is not part of the V2 signature.
+- `Taker`, `Nonce`, and `FeeRateBPS` are deprecated. Nonzero values are rejected instead of silently ignored; do not populate them from the fee-rate endpoint.
+- `PostOrderWithOptions` supports `PostOnly` and `DeferExec`. Post-only orders require GTC or GTD. Use `OrderFAK` for fill-and-kill; the legacy `OrderIOC` constant is translated to FAK on submission.
+- `SignatureTypePoly1271` supports deposit-wallet signatures. Set `Maker` to the deposit-wallet address and authenticate HTTP requests with the owner EOA's credentials/address. Wallet deployment, collateral wrapping, and approvals are separate operations and are not performed by this library.
+- Builder attribution is a public bytes32 code in `CreateOrderParams.Builder`, included **before signing**. `WithBuilderCredentials` is a deprecated no-op and no longer emits legacy builder HMAC headers. Query the public paginated feed with `GetBuilderTradesByCode`; `WithBuilderCode` supplies the code for the deprecated `GetBuilderTrades` wrapper, not for order signing.
+- Trade responses retain taker-order and maker-fill attribution, and balance responses expose the per-contract `Allowances` map. Cancellation methods require server acknowledgement; partial batch cancellation returns both successful IDs and a `*CancelError` describing unconfirmed IDs.
+
+```go
+signed, err := signer.CreateOrder(polymarket.CreateOrderParams{
+    TokenID: tokenID,
+    Price:   0.50,
+    Size:    10,
+    Side:    polymarket.Buy,
+    Builder: os.Getenv("POLY_BUILDER_CODE"), // optional public bytes32 code
+})
+if err != nil {
+    return err
+}
+resp, err := client.Clob.PostOrderWithOptions(ctx, signed, polymarket.OrderGTC,
+    polymarket.PostOrderOptions{PostOnly: true})
+```
+
+`go run ./examples/postorder -token TOKEN_ID` previews an order without network calls. It requires a local `POLY_PRIVATE_KEY`; only an explicit `-send` submits an order. Check the token's tick size, minimum order size, market type, collateral, approvals, and account eligibility before submitting.
+
+Offline regression coverage includes independent viem-generated V2 signing vectors (with source commit recorded in `testdata/v2-signing.json`), all four signature types, negative-risk domains, literal HTTP payloads, pagination, and cancellation failures. Run `go test -race ./...` and `go vet ./...`. These checks do not establish live trading readiness.
 
 ## Quick Start
 
@@ -64,7 +95,7 @@ client := polymarket.NewClient(
 orders, err := client.Clob.GetOrders(ctx, nil)
 balance, err := client.Clob.GetBalanceAllowance(ctx, nil)
 trades, err := client.Clob.GetTrades(ctx, nil)
-err = client.Clob.CancelAll(ctx)
+_, err = client.Clob.CancelAll(ctx)
 ```
 
 ## Architecture
@@ -180,8 +211,7 @@ order, err := signer.BuildOrder(polymarket.CreateOrderParams{
     Price:         0.75,
     Size:          100.0,
     Side:          polymarket.Sell,
-    FeeRateBPS:    100,           // 1% fee
-    Expiration:    1700000000,    // Unix timestamp
+    Expiration:    time.Now().Add(time.Hour).Unix(), // Unix seconds; HTTP-only
     NegRisk:       true,          // for neg-risk markets
     SignatureType: polymarket.SignatureTypePoly, // proxy wallet
     Maker:         proxyWalletAddr,             // override maker address
@@ -198,7 +228,8 @@ signed, err := signer.SignOrder(order)
 | `OrderGTC` | Good Till Cancelled |
 | `OrderGTD` | Good Till Date |
 | `OrderFOK` | Fill Or Kill |
-| `OrderIOC` | Immediate Or Cancel |
+| `OrderFAK` | Fill And Kill |
+| `OrderIOC` | Legacy spelling; submitted as FAK |
 
 ### Signature types
 
@@ -207,6 +238,7 @@ signed, err := signer.SignOrder(order)
 | `SignatureTypeEOA` | Direct wallet (externally owned account) |
 | `SignatureTypePoly` | Polymarket proxy wallet |
 | `SignatureTypeGnosisSafe` | Gnosis Safe multisig |
+| `SignatureTypePoly1271` | Deposit wallet (POLY_1271), with its address as Maker |
 
 ## API Reference
 

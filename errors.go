@@ -5,6 +5,17 @@ import (
 	"net/http"
 )
 
+// CancelError reports rejected or unacknowledged cancellations, including HTTP
+// 200 responses with not_canceled entries. Batch methods also return the IDs
+// that were successfully canceled.
+type CancelError struct {
+	NotCanceled map[string]string
+}
+
+func (e *CancelError) Error() string {
+	return fmt.Sprintf("polymarket: %d order cancellations not confirmed", len(e.NotCanceled))
+}
+
 // APIError represents an error response from the Polymarket API.
 type APIError struct {
 	StatusCode int

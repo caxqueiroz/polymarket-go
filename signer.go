@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"time"
 )
 
 // ChainConfig holds chain-specific contract addresses for order signing.
@@ -19,8 +20,8 @@ type ChainConfig struct {
 // Polygon is the chain configuration for Polygon mainnet.
 var Polygon = ChainConfig{
 	ChainID:         137,
-	Exchange:        "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
-	NegRiskExchange: "0xC5d563A36AE78145C45a50134d48A1215220f80a",
+	Exchange:        "0xE111180000d2663C0091e4f400237545B87B996B",
+	NegRiskExchange: "0xe2222d279d744050d28e00520010520000310F59",
 }
 
 // SignatureType identifies how the order signature was created.
@@ -33,6 +34,8 @@ const (
 	SignatureTypePoly SignatureType = 1
 	// SignatureTypeGnosisSafe is for Gnosis Safe multisig signatures.
 	SignatureTypeGnosisSafe SignatureType = 2
+	// SignatureTypePoly1271 is for Polymarket deposit-wallet signatures.
+	SignatureTypePoly1271 SignatureType = 3
 )
 
 // OrderType specifies the time-in-force behavior of an order.
@@ -43,26 +46,22 @@ const (
 	OrderGTD OrderType = "GTD" // Good Till Date
 	OrderFOK OrderType = "FOK" // Fill Or Kill
 	OrderIOC OrderType = "IOC" // Immediate Or Cancel
+	OrderFAK OrderType = "FAK" // Fill And Kill (partial fills allowed)
 )
 
 // ---- EIP-712 typed data hashing ----
 //
 // Polymarket's CTF Exchange uses EIP-712 typed structured data signing.
-// Domain: { name: "Polymarket CTF Exchange", version: "1", chainId, verifyingContract }
-// Type:   Order(uint256 salt, address maker, address signer, address taker,
-//               uint256 tokenId, uint256 makerAmount, uint256 takerAmount,
-//               uint256 expiration, uint256 nonce, uint256 feeRateBps,
-//               uint8 side, uint8 signatureType)
+// The V2 Exchange domain uses version "2". API authentication remains version "1".
+// Expiration is sent over HTTP but is not part of the signed order struct.
+
+const orderTypeString = "Order(uint256 salt,address maker,address signer,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint8 side,uint8 signatureType,uint256 timestamp,bytes32 metadata,bytes32 builder)"
 
 var (
 	eip712DomainTypeHash = keccak256([]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"))
 	eip712DomainName     = keccak256([]byte("Polymarket CTF Exchange"))
-	eip712DomainVersion  = keccak256([]byte("1"))
-	orderTypeHash        = keccak256([]byte(
-		"Order(uint256 salt,address maker,address signer,address taker," +
-			"uint256 tokenId,uint256 makerAmount,uint256 takerAmount," +
-			"uint256 expiration,uint256 nonce,uint256 feeRateBps," +
-			"uint8 side,uint8 signatureType)"))
+	eip712DomainVersion  = keccak256([]byte("2"))
+	orderTypeHash        = keccak256([]byte(orderTypeString))
 )
 
 // computeDomainSeparator computes the EIP-712 domain separator.
@@ -106,16 +105,19 @@ func abiEncodeUint8(v uint8) []byte {
 
 // OrderData represents the EIP-712 order struct that gets hashed and signed.
 type OrderData struct {
+	Timestamp     *big.Int // Order creation time in milliseconds
+	Metadata      string   // bytes32 hex
+	Builder       string   // bytes32 builder code
 	Salt          *big.Int
 	Maker         string // Ethereum address (0x...)
 	Signer        string // Ethereum address (0x...)
-	Taker         string // Ethereum address (0x...)
+	Taker         string // Deprecated: V2 requires empty or the zero address.
 	TokenID       *big.Int
 	MakerAmount   *big.Int
 	TakerAmount   *big.Int
-	Expiration    *big.Int
-	Nonce         *big.Int
-	FeeRateBPS    *big.Int
+	Expiration    *big.Int // HTTP-only expiry in seconds; excluded from the V2 signature
+	Nonce         *big.Int // Deprecated: V2 requires nil or zero.
+	FeeRateBPS    *big.Int // Deprecated: V2 requires nil or zero; fees are set by the exchange.
 	Side          Side
 	SignatureType SignatureType
 	NegRisk       bool // determines which exchange domain to use
@@ -133,15 +135,14 @@ func hashOrder(o *OrderData) [32]byte {
 	buf = append(buf, abiEncodeUint256(o.Salt)...)
 	buf = append(buf, abiEncodeAddress(o.Maker)...)
 	buf = append(buf, abiEncodeAddress(o.Signer)...)
-	buf = append(buf, abiEncodeAddress(o.Taker)...)
 	buf = append(buf, abiEncodeUint256(o.TokenID)...)
 	buf = append(buf, abiEncodeUint256(o.MakerAmount)...)
 	buf = append(buf, abiEncodeUint256(o.TakerAmount)...)
-	buf = append(buf, abiEncodeUint256(o.Expiration)...)
-	buf = append(buf, abiEncodeUint256(o.Nonce)...)
-	buf = append(buf, abiEncodeUint256(o.FeeRateBPS)...)
 	buf = append(buf, abiEncodeUint8(sideVal)...)
 	buf = append(buf, abiEncodeUint8(uint8(o.SignatureType))...)
+	buf = append(buf, abiEncodeUint256(o.Timestamp)...)
+	buf = append(buf, abiEncodeBytes32(o.Metadata)...)
+	buf = append(buf, abiEncodeBytes32(o.Builder)...)
 	return keccak256(buf)
 }
 
@@ -168,7 +169,7 @@ const zeroAddress = "0x0000000000000000000000000000000000000000"
 // SignedOrder is an order with its EIP-712 signature, ready to be posted to the CLOB.
 type SignedOrder struct {
 	Order     OrderData
-	Signature string // 0x-prefixed hex encoded signature (65 bytes: r‖s‖v)
+	Signature string // 0x-prefixed signature; POLY_1271 includes the deposit-wallet envelope
 	Owner     string // maker address
 }
 
@@ -203,14 +204,17 @@ func (s *OrderSigner) Address() string {
 
 // CreateOrderParams holds the user-facing parameters for creating a new order.
 type CreateOrderParams struct {
+	Timestamp     int64         // Order creation time in milliseconds; zero uses the current time
+	Metadata      string        // bytes32 hex; empty uses zero
+	Builder       string        // bytes32 builder code; empty uses zero
 	TokenID       string        // CLOB token ID (large integer as string)
 	Price         float64       // Price per share (0 < price < 1)
 	Size          float64       // Number of shares (must be > 0)
 	Side          Side          // Buy or Sell
-	FeeRateBPS    int           // Fee rate in basis points (default 0)
-	Nonce         int           // Nonce (default 0)
+	FeeRateBPS    int           // Deprecated: must be zero in V2; fees are set by the exchange.
+	Nonce         int           // Deprecated: must be zero in V2.
 	Expiration    int64         // Unix timestamp, 0 = no expiration
-	Taker         string        // Taker address, empty = any taker
+	Taker         string        // Deprecated: V2 requires empty or the zero address.
 	NegRisk       bool          // True if this is a neg-risk market
 	SignatureType SignatureType // Default: SignatureTypeEOA
 	Maker         string        // Maker address override (for POLY_PROXY; defaults to signer address)
@@ -229,15 +233,38 @@ func (s *OrderSigner) CreateOrder(p CreateOrderParams) (*SignedOrder, error) {
 // BuildOrder creates an unsigned OrderData from the given parameters.
 // Use SignOrder to sign it afterwards, or use CreateOrder for both steps.
 func (s *OrderSigner) BuildOrder(p CreateOrderParams) (*OrderData, error) {
-	if p.Price <= 0 || p.Price >= 1 {
+	if math.IsNaN(p.Price) || p.Price <= 0 || p.Price >= 1 {
 		return nil, fmt.Errorf("polymarket: price must be between 0 and 1 (exclusive), got %f", p.Price)
 	}
-	if p.Size <= 0 {
+	if math.IsNaN(p.Size) || math.IsInf(p.Size, 0) || p.Size <= 0 || p.Size*1e6 >= float64(math.MaxInt64) {
 		return nil, fmt.Errorf("polymarket: size must be positive, got %f", p.Size)
+	}
+	if p.Side != Buy && p.Side != Sell {
+		return nil, fmt.Errorf("polymarket: side must be BUY or SELL")
+	}
+	if p.Timestamp < 0 || p.Expiration < 0 {
+		return nil, fmt.Errorf("polymarket: timestamp and expiration must be non-negative")
+	}
+	if p.FeeRateBPS != 0 || p.Nonce != 0 || (p.Taker != "" && !strings.EqualFold(p.Taker, zeroAddress)) {
+		return nil, fmt.Errorf("polymarket: feeRateBps, nonce and taker are not supported in V2")
+	}
+	if p.SignatureType < SignatureTypeEOA || p.SignatureType > SignatureTypePoly1271 {
+		return nil, fmt.Errorf("polymarket: unsupported signature type %d", p.SignatureType)
+	}
+	if p.SignatureType == SignatureTypePoly1271 && p.Maker == "" {
+		return nil, fmt.Errorf("polymarket: POLY_1271 requires a deposit-wallet maker address")
+	}
+	metadata, err := normalizeBytes32(p.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: metadata: %w", err)
+	}
+	builder, err := normalizeBytes32(p.Builder)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: builder: %w", err)
 	}
 
 	tokenID := new(big.Int)
-	if _, ok := tokenID.SetString(p.TokenID, 10); !ok {
+	if _, ok := tokenID.SetString(p.TokenID, 10); !ok || tokenID.Sign() < 0 || tokenID.BitLen() > 256 {
 		return nil, fmt.Errorf("polymarket: invalid tokenID: %s", p.TokenID)
 	}
 
@@ -249,22 +276,31 @@ func (s *OrderSigner) BuildOrder(p CreateOrderParams) (*OrderData, error) {
 	}
 
 	makerAmount, takerAmount := calculateOrderAmounts(p.Price, p.Size, p.Side)
+	if makerAmount.Sign() <= 0 || takerAmount.Sign() <= 0 {
+		return nil, fmt.Errorf("polymarket: order amounts round to zero")
+	}
 
 	maker := p.Maker
 	if maker == "" {
 		maker = s.address
 	}
 
-	taker := p.Taker
-	if taker == "" {
-		taker = zeroAddress
+	if !validAddress(maker) || strings.EqualFold(maker, zeroAddress) {
+		return nil, fmt.Errorf("polymarket: invalid maker address")
+	}
+	orderSigner := s.address
+	if p.SignatureType == SignatureTypePoly1271 {
+		orderSigner = checksumAddress(maker)
+	}
+	if p.Timestamp == 0 {
+		p.Timestamp = time.Now().UnixMilli()
 	}
 
 	return &OrderData{
 		Salt:          salt,
 		Maker:         checksumAddress(maker),
-		Signer:        s.address,
-		Taker:         checksumAddress(taker),
+		Signer:        orderSigner,
+		Taker:         zeroAddress,
 		TokenID:       tokenID,
 		MakerAmount:   makerAmount,
 		TakerAmount:   takerAmount,
@@ -274,12 +310,32 @@ func (s *OrderSigner) BuildOrder(p CreateOrderParams) (*OrderData, error) {
 		Side:          p.Side,
 		SignatureType: p.SignatureType,
 		NegRisk:       p.NegRisk,
+		Timestamp:     big.NewInt(p.Timestamp),
+		Metadata:      metadata,
+		Builder:       builder,
 	}, nil
 }
 
 // SignOrder signs an OrderData and returns a SignedOrder.
 func (s *OrderSigner) SignOrder(order *OrderData) (*SignedOrder, error) {
+	if err := validateV2Order(order); err != nil {
+		return nil, err
+	}
+	if order.SignatureType != SignatureTypePoly1271 && !strings.EqualFold(order.Signer, s.address) {
+		return nil, fmt.Errorf("polymarket: order signer does not match signing key")
+	}
+	// Normalize optional bytes32 fields before signing and serializing them.
+	normalized := *order
+	normalized.Metadata, _ = normalizeBytes32(order.Metadata)
+	normalized.Builder, _ = normalizeBytes32(order.Builder)
+	if normalized.Expiration == nil {
+		normalized.Expiration = big.NewInt(0)
+	}
+	order = &normalized
 	digest := orderDigest(order, s.chain)
+	if order.SignatureType == SignatureTypePoly1271 {
+		digest = depositWalletDigest(order, s.chain)
+	}
 
 	r, sig_s, v, err := ecdsaSignCompact(digest[:], s.privKey)
 	if err != nil {
@@ -291,6 +347,18 @@ func (s *OrderSigner) SignOrder(order *OrderData) (*SignedOrder, error) {
 	copy(sigBytes[:32], r[:])
 	copy(sigBytes[32:64], sig_s[:])
 	sigBytes[64] = v + 27
+	if order.SignatureType == SignatureTypePoly1271 {
+		exchange := s.chain.Exchange
+		if order.NegRisk {
+			exchange = s.chain.NegRiskExchange
+		}
+		domain := computeDomainSeparator(s.chain.ChainID, exchange)
+		contents := hashOrder(order)
+		sigBytes = append(sigBytes, domain[:]...)
+		sigBytes = append(sigBytes, contents[:]...)
+		sigBytes = append(sigBytes, orderTypeString...)
+		sigBytes = append(sigBytes, byte(len(orderTypeString)>>8), byte(len(orderTypeString)))
+	}
 
 	return &SignedOrder{
 		Order:     *order,
@@ -388,10 +456,10 @@ func (s *OrderSigner) BuildL1AuthHeaders(timestamp string, nonce int) (*L1AuthHe
 
 // calculateOrderAmounts computes the maker and taker amounts for an order.
 //
-// For BUY:  makerAmount = size·price (USDC paid), takerAmount = size (CT tokens received)
-// For SELL: makerAmount = size (CT tokens sold), takerAmount = size·price (USDC received)
+// For BUY:  makerAmount = size·price (pUSD paid), takerAmount = size (CT tokens received)
+// For SELL: makerAmount = size (CT tokens sold), takerAmount = size·price (pUSD received)
 //
-// Amounts are in base units with 6 decimal places (matching USDC and CT token precision).
+// Amounts are in base units with 6 decimal places (matching pUSD and CT token precision).
 // generateSalt creates a random salt for an order, matching the Python client's
 // approach: round(unix_timestamp * random_float). This keeps the salt small enough
 // (< 2^53) to be safely parsed by JavaScript JSON parsers on the server side.

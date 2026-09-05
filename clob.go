@@ -15,8 +15,9 @@ var timeNow = time.Now
 
 // ClobClient provides access to the Polymarket CLOB API.
 type ClobClient struct {
-	base    *baseClient
-	baseURL string
+	base        *baseClient
+	baseURL     string
+	builderCode string
 }
 
 // Health checks if the CLOB API is operational.
@@ -383,23 +384,26 @@ func (c *ClobClient) GetOrders(ctx context.Context, p *OrdersParams) ([]OpenOrde
 
 // CancelOrder cancels a single order by ID. Requires authentication.
 func (c *ClobClient) CancelOrder(ctx context.Context, orderID string) error {
-	_, err := c.base.deleteRaw(ctx, c.baseURL, "/order", CancelOrderPayload{ID: orderID})
+	body, err := c.base.deleteRaw(ctx, c.baseURL, "/order", CancelOrderPayload{ID: orderID})
+	if err != nil {
+		return err
+	}
+	_, err = decodeCancelResponse(body, []string{orderID})
 	return err
 }
 
 // CancelOrders cancels multiple orders by ID. Returns the IDs of canceled orders.
 // Requires authentication.
 func (c *ClobClient) CancelOrders(ctx context.Context, orderIDs []string) ([]string, error) {
-	body, err := c.base.deleteRaw(ctx, c.baseURL, "/orders", CancelOrdersPayload{OrderIDs: orderIDs})
+	if len(orderIDs) == 0 {
+		return nil, nil
+	}
+	body, err := c.base.deleteRaw(ctx, c.baseURL, "/orders", orderIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp cancelResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("polymarket: decoding cancel response: %w", err)
-	}
-	return resp.Canceled, nil
+	return decodeCancelResponse(body, orderIDs)
 }
 
 // CancelAll cancels all open orders. Returns the IDs of canceled orders.
@@ -410,9 +414,33 @@ func (c *ClobClient) CancelAll(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
+	return decodeCancelResponse(body, nil)
+}
+
+func decodeCancelResponse(body []byte, requested []string) ([]string, error) {
 	var resp cancelResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("polymarket: decoding cancel-all response: %w", err)
+		return nil, fmt.Errorf("polymarket: decoding cancel response: %w", err)
+	}
+	if resp.Canceled == nil && resp.NotCanceled == nil {
+		return nil, fmt.Errorf("polymarket: missing cancellation acknowledgement")
+	}
+	if resp.NotCanceled == nil {
+		resp.NotCanceled = make(map[string]string)
+	}
+	canceled := make(map[string]bool, len(resp.Canceled))
+	for _, id := range resp.Canceled {
+		canceled[id] = true
+	}
+	for _, id := range requested {
+		if !canceled[id] {
+			if _, ok := resp.NotCanceled[id]; !ok {
+				resp.NotCanceled[id] = "cancellation not acknowledged"
+			}
+		}
+	}
+	if len(resp.NotCanceled) != 0 {
+		return resp.Canceled, &CancelError{NotCanceled: resp.NotCanceled}
 	}
 	return resp.Canceled, nil
 }
@@ -581,13 +609,37 @@ func (c *ClobClient) DeleteApiKey(ctx context.Context) error {
 	return err
 }
 
-// PostOrder submits a signed order to the CLOB. Requires authentication.
+// PostOrderWithOptions submits a signed V2 order to the CLOB. Requires authentication.
 //
 // The order must be signed using an OrderSigner with the correct EIP-712 signature.
-// The orderType controls time-in-force behavior (GTC, GTD, FOK, IOC).
-func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderType OrderType) (*PostOrderResponse, error) {
+// The orderType controls time-in-force behavior (GTC, GTD, FOK, FAK).
+// The legacy IOC constant is translated to FAK. Post-only requires GTC or GTD.
+func (c *ClobClient) PostOrderWithOptions(ctx context.Context, signed *SignedOrder, orderType OrderType, opts PostOrderOptions) (*PostOrderResponse, error) {
 	if c.base.creds == nil {
 		return nil, fmt.Errorf("polymarket: PostOrder requires authentication (use WithCredentials)")
+	}
+	if signed == nil {
+		return nil, fmt.Errorf("polymarket: nil signed order")
+	}
+	if err := validateV2Order(&signed.Order); err != nil {
+		return nil, err
+	}
+	if orderType == OrderIOC {
+		orderType = OrderFAK
+	}
+	switch orderType {
+	case OrderGTC, OrderGTD, OrderFOK, OrderFAK:
+	default:
+		return nil, fmt.Errorf("polymarket: unsupported order type %q", orderType)
+	}
+	if opts.PostOnly && orderType != OrderGTC && orderType != OrderGTD {
+		return nil, fmt.Errorf("polymarket: post-only requires GTC or GTD")
+	}
+	metadata, _ := normalizeBytes32(signed.Order.Metadata) // validated above
+	builder, _ := normalizeBytes32(signed.Order.Builder)
+	expiration := "0"
+	if signed.Order.Expiration != nil {
+		expiration = signed.Order.Expiration.String()
 	}
 
 	req := postOrderRequest{
@@ -595,20 +647,21 @@ func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderTy
 			Salt:          json.Number(signed.Order.Salt.String()), // bare JSON number, matching Python client
 			Maker:         signed.Order.Maker,
 			Signer:        signed.Order.Signer,
-			Taker:         signed.Order.Taker,
 			TokenID:       signed.Order.TokenID.String(),
 			MakerAmount:   signed.Order.MakerAmount.String(),
 			TakerAmount:   signed.Order.TakerAmount.String(),
-			Expiration:    signed.Order.Expiration.String(),
-			Nonce:         signed.Order.Nonce.String(),
-			FeeRateBPS:    signed.Order.FeeRateBPS.String(),
+			Expiration:    expiration,
+			Timestamp:     signed.Order.Timestamp.String(),
+			Metadata:      metadata,
+			Builder:       builder,
 			Side:          string(signed.Order.Side),
 			SignatureType: int(signed.Order.SignatureType),
 			Signature:     signed.Signature,
 		},
 		Owner:     c.base.creds.Key, // API key, not wallet address (matches Python client)
 		OrderType: string(orderType),
-		PostOnly:  false,
+		PostOnly:  opts.PostOnly,
+		DeferExec: opts.DeferExec,
 	}
 
 	var resp PostOrderResponse
@@ -618,21 +671,56 @@ func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderTy
 	return &resp, nil
 }
 
-// GetBuilderTrades returns trades attributed to the builder account.
-// Requires authentication. Optionally filter by market condition ID.
-func (c *ClobClient) GetBuilderTrades(ctx context.Context, market *string) ([]UserTrade, error) {
-	if c.base.creds == nil {
-		return nil, fmt.Errorf("polymarket: GetBuilderTrades requires authentication (use WithCredentials)")
-	}
+// PostOrder submits a signed order with default execution options.
+func (c *ClobClient) PostOrder(ctx context.Context, signed *SignedOrder, orderType OrderType) (*PostOrderResponse, error) {
+	return c.PostOrderWithOptions(ctx, signed, orderType, PostOrderOptions{})
+}
 
-	params := url.Values{}
+// GetBuilderTrades returns trades for the code configured with WithBuilderCode.
+// Deprecated: use GetBuilderTradesByCode for the full V2 attribution fields.
+func (c *ClobClient) GetBuilderTrades(ctx context.Context, market *string) ([]UserTrade, error) {
+	trades, err := c.GetBuilderTradesByCode(ctx, c.builderCode, market)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UserTrade, 0, len(trades))
+	for _, tr := range trades {
+		out = append(out, UserTrade{ID: tr.ID, Market: tr.Market, AssetID: tr.AssetID,
+			Side: tr.Side, Size: tr.Size, Price: tr.Price, Status: tr.Status, Outcome: tr.Outcome,
+			Owner: tr.Owner, MakerAddress: tr.Maker, MatchTime: tr.MatchTime,
+			TransactionHash: tr.TransactionHash, BucketIndex: tr.BucketIndex,
+			Type: tr.TradeType, TakerOrderID: tr.TakerOrderHash})
+	}
+	return out, nil
+}
+
+// GetBuilderTradesByCode retrieves all pages of the public V2 builder feed.
+func (c *ClobClient) GetBuilderTradesByCode(ctx context.Context, code string, market *string) ([]BuilderTrade, error) {
+	code, err := normalizeBytes32(code)
+	if err != nil || code == zeroBytes32 {
+		return nil, fmt.Errorf("polymarket: a nonzero bytes32 builder code is required")
+	}
+	params := url.Values{"builder_code": {code}}
 	if market != nil {
 		params.Set("market", *market)
 	}
-
-	var trades []UserTrade
-	if err := c.base.get(ctx, c.baseURL, "/builder-trades", params, &trades); err != nil {
-		return nil, err
+	var trades []BuilderTrade
+	seen := make(map[string]bool)
+	for cursor := "MA=="; cursor != "" && cursor != "LTE="; {
+		if seen[cursor] {
+			return nil, fmt.Errorf("polymarket: repeated builder trades cursor")
+		}
+		seen[cursor] = true
+		params.Set("next_cursor", cursor)
+		var page struct {
+			Data       []BuilderTrade `json:"data"`
+			NextCursor string         `json:"next_cursor"`
+		}
+		if err := c.base.get(ctx, c.baseURL, "/builder/trades", params, &page); err != nil {
+			return nil, err
+		}
+		trades = append(trades, page.Data...)
+		cursor = page.NextCursor
 	}
 	return trades, nil
 }

@@ -1,128 +1,71 @@
+// Command postorder previews a V2 BUY order. Only -send submits it.
+// Set POLY_PRIVATE_KEY locally; never paste a real key into source or chat.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"time"
 
 	polymarket "github.com/caxqueiroz/polymarket-go"
 )
 
 func main() {
-	// ── 1. Load private key ─────────────────────────────────────────────
-	privKey := os.Getenv("POLY_PRIVATE_KEY")
-	if privKey == "" {
-		log.Fatal("set POLY_PRIVATE_KEY environment variable (hex, with or without 0x)")
+	if err := run(); err != nil {
+		slog.Error("order example failed", "error", err)
+		os.Exit(1)
 	}
+}
 
-	// ── 2. Create signer + unauthenticated client ───────────────────────
-	signer, err := polymarket.NewOrderSigner(privKey, polymarket.Polygon)
+func run() error {
+	tokenID := flag.String("token", "", "explicit outcome token ID (required)")
+	price := flag.Float64("price", 0.01, "BUY limit price; must match the market tick size")
+	size := flag.Float64("size", 5, "number of shares; check the market minimum")
+	maker := flag.String("maker", "", "funding wallet address; required for deposit wallets")
+	signatureType := flag.Int("signature-type", 0, "0=EOA, 1=proxy, 2=Safe, 3=deposit wallet")
+	negRisk := flag.Bool("neg-risk", false, "use the negative-risk exchange")
+	postOnly := flag.Bool("post-only", true, "reject an order that would immediately match")
+	send := flag.Bool("send", false, "submit a real order (default: offline preview only)")
+	flag.Parse()
+	if *tokenID == "" {
+		return fmt.Errorf("-token is required; select the market and outcome explicitly")
+	}
+	signer, err := polymarket.NewOrderSigner(os.Getenv("POLY_PRIVATE_KEY"), polymarket.Polygon)
 	if err != nil {
-		log.Fatalf("NewOrderSigner: %v", err)
+		return fmt.Errorf("create signer from POLY_PRIVATE_KEY: %w", err)
 	}
-	fmt.Printf("Signer address: %s\n\n", signer.Address())
-
-	client := polymarket.NewClient()
-	ctx := context.Background()
-
-	// ── 3. Derive API credentials (L1 auth) ─────────────────────────────
-	fmt.Println("Deriving API credentials...")
-	apiCreds, err := client.Clob.CreateOrDeriveApiCreds(ctx, signer)
-	if err != nil {
-		log.Fatalf("CreateOrDeriveApiCreds: %v", err)
-	}
-	fmt.Printf("  API Key: %s\n\n", apiCreds.ApiKey)
-
-	// ── 4. Re-create client with HMAC credentials ───────────────────────
-	client = polymarket.NewClient(
-		polymarket.WithCredentials(apiCreds.ToCredentials(signer.Address())),
-	)
-
-	// ── 5. Find an active market via Gamma API ──────────────────────────
-	// The Gamma API supports filtering by active/closed, which is much
-	// faster than paginating through the CLOB's /markets endpoint.
-	fmt.Println("Looking for an active market via Gamma API...")
-	active := true
-	closed := false
-	limit := 10
-	gammaMarkets, err := client.Gamma.ListMarkets(ctx, &polymarket.GammaMarketParams{
-		Active: &active,
-		Closed: &closed,
-		Limit:  &limit,
+	signed, err := signer.CreateOrder(polymarket.CreateOrderParams{
+		TokenID: *tokenID, Price: *price, Size: *size, Side: polymarket.Buy,
+		Maker: *maker, SignatureType: polymarket.SignatureType(*signatureType), NegRisk: *negRisk,
+		Builder: os.Getenv("POLY_BUILDER_CODE"),
 	})
 	if err != nil {
-		log.Fatalf("Gamma.ListMarkets: %v", err)
+		return fmt.Errorf("create V2 order: %w", err)
+	}
+	fmt.Printf("BUY %g shares at %g; maker=%s; postOnly=%t\n", *size, *price, signed.Order.Maker, *postOnly)
+	if !*send {
+		fmt.Println("Offline preview only: no credentials derived and no order sent. Use -send only after checking the market, funding, approvals, and account eligibility.")
+		return nil
 	}
 
-	var tokenID string
-	var question string
-	var negRisk bool
-	found := false
-	for _, gm := range gammaMarkets {
-		if gm.Active && !gm.Closed && len(gm.ClobTokenIDs) > 0 {
-			tokenID = string(gm.ClobTokenIDs[0])
-			question = gm.Question
-			negRisk = gm.NegRisk
-			found = true
-			break
-		}
-	}
-	if !found {
-		log.Fatal("no active market accepting orders found via Gamma API")
-	}
-
-	fmt.Printf("Market:  %s\n", question)
-	fmt.Printf("Token:   %s\n", tokenID)
-	fmt.Printf("NegRisk: %v\n\n", negRisk)
-
-	// ── 6. Get fee rate for this token ──────────────────────────────────
-	feeRate, err := client.Clob.GetFeeRateBPS(ctx, tokenID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	apiCreds, err := polymarket.NewClient().Clob.CreateOrDeriveApiCreds(ctx, signer)
 	if err != nil {
-		log.Fatalf("GetFeeRateBPS: %v", err)
+		return fmt.Errorf("derive API credentials: %w", err)
 	}
-	fmt.Printf("Fee rate: %.2f bps\n\n", feeRate)
-
-	// ── 7. Build and sign order ─────────────────────────────────────────
-	// Place a small BUY order at a very low price so it sits on the book
-	// and is unlikely to fill immediately. Adjust as needed.
-	params := polymarket.CreateOrderParams{
-		TokenID:    tokenID,
-		Price:      0.01, // $0.01 per share (very unlikely to fill)
-		Size:       5,    // 5 shares
-		Side:       polymarket.Buy,
-		FeeRateBPS: int(feeRate),
-		NegRisk:    negRisk,
-	}
-
-	signed, err := signer.CreateOrder(params)
+	client := polymarket.NewClient(polymarket.WithCredentials(apiCreds.ToCredentials(signer.Address())))
+	resp, err := client.Clob.PostOrderWithOptions(ctx, signed, polymarket.OrderGTC,
+		polymarket.PostOrderOptions{PostOnly: *postOnly})
 	if err != nil {
-		log.Fatalf("CreateOrder: %v", err)
+		return fmt.Errorf("post order: %w", err)
 	}
-
-	fmt.Println("=== Signed Order ===")
-	fmt.Printf("  Salt:        %s\n", signed.Order.Salt)
-	fmt.Printf("  Maker:       %s\n", signed.Order.Maker)
-	fmt.Printf("  Signer:      %s\n", signed.Order.Signer)
-	fmt.Printf("  TokenID:     %s\n", signed.Order.TokenID)
-	fmt.Printf("  MakerAmount: %s\n", signed.Order.MakerAmount)
-	fmt.Printf("  TakerAmount: %s\n", signed.Order.TakerAmount)
-	fmt.Printf("  Side:        %s\n", signed.Order.Side)
-	fmt.Printf("  Signature:   %s\n\n", signed.Signature)
-
-	// ── 8. Post the order ───────────────────────────────────────────────
-	resp, err := client.Clob.PostOrder(ctx, signed, polymarket.OrderGTC)
-	if err != nil {
-		log.Fatalf("PostOrder: %v", err)
+	if !resp.Success {
+		return fmt.Errorf("order rejected: %s", resp.ErrorMsg)
 	}
-
-	fmt.Println("=== Post Order Response ===")
-	fmt.Printf("  Success:  %v\n", resp.Success)
-	fmt.Printf("  OrderID:  %s\n", resp.OrderID)
-	if resp.ErrorMsg != "" {
-		fmt.Printf("  Error:    %s\n", resp.ErrorMsg)
-	}
-	if len(resp.TransactionHashes) > 0 {
-		fmt.Printf("  Tx Hashes: %v\n", resp.TransactionHashes)
-	}
+	fmt.Printf("Order ID: %s; status: %s\n", resp.OrderID, resp.Status)
+	return nil
 }

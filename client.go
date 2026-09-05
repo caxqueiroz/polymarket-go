@@ -27,12 +27,18 @@ type Client struct {
 type Option func(*options)
 
 type options struct {
+	builderCode  string
 	httpClient   *http.Client
 	clobBaseURL  string
 	gammaBaseURL string
 	dataBaseURL  string
 	creds        *Credentials
-	builderCreds *BuilderCredentials
+}
+
+// WithBuilderCode sets the default public code for GetBuilderTrades queries.
+// For order attribution, also set CreateOrderParams.Builder before signing.
+func WithBuilderCode(code string) Option {
+	return func(o *options) { o.builderCode = code }
 }
 
 // WithHTTPClient sets a custom HTTP client.
@@ -60,12 +66,11 @@ func WithCredentials(c *Credentials) Option {
 	return func(o *options) { o.creds = c }
 }
 
-// WithBuilderCredentials sets builder API key credentials for order attribution.
-// Builder credentials are separate from user credentials — they attribute trading
-// volume to the builder account. When set, POLY_BUILDER_* headers are automatically
-// added to order submission requests.
+// WithBuilderCredentials is retained for source compatibility and has no effect.
+// Deprecated: CLOB V2 attribution uses CreateOrderParams.Builder in the signed
+// order. Legacy POLY_BUILDER_* headers are no longer sent by this client.
 func WithBuilderCredentials(c *BuilderCredentials) Option {
-	return func(o *options) { o.builderCreds = c }
+	return func(o *options) {}
 }
 
 // NewClient creates a new Polymarket client.
@@ -81,13 +86,12 @@ func NewClient(opts ...Option) *Client {
 	}
 
 	base := &baseClient{
-		httpClient:   o.httpClient,
-		creds:        o.creds,
-		builderCreds: o.builderCreds,
+		httpClient: o.httpClient,
+		creds:      o.creds,
 	}
 
 	return &Client{
-		Clob:  &ClobClient{base: base, baseURL: o.clobBaseURL},
+		Clob:  &ClobClient{base: base, baseURL: o.clobBaseURL, builderCode: o.builderCode},
 		Gamma: &GammaClient{base: base, baseURL: o.gammaBaseURL},
 		Data:  &DataClient{base: base, baseURL: o.dataBaseURL},
 	}
@@ -95,9 +99,8 @@ func NewClient(opts ...Option) *Client {
 
 // baseClient holds the shared HTTP logic.
 type baseClient struct {
-	httpClient   *http.Client
-	creds        *Credentials
-	builderCreds *BuilderCredentials
+	httpClient *http.Client
+	creds      *Credentials
 }
 
 func (b *baseClient) get(ctx context.Context, baseURL, path string, params url.Values, out any) error {
@@ -181,12 +184,6 @@ func (b *baseClient) postJSON(ctx context.Context, baseURL, path string, payload
 		}
 	}
 
-	if b.builderCreds != nil {
-		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
-			return err
-		}
-	}
-
 	return b.do(req, out)
 }
 
@@ -206,12 +203,6 @@ func (b *baseClient) postJSONRaw(ctx context.Context, baseURL, path string, payl
 
 	if b.creds != nil {
 		if err := signRequest(req, b.creds, string(data)); err != nil {
-			return nil, err
-		}
-	}
-
-	if b.builderCreds != nil {
-		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
 			return nil, err
 		}
 	}
@@ -355,12 +346,6 @@ func (b *baseClient) deleteRaw(ctx context.Context, baseURL, path string, payloa
 
 	if b.creds != nil {
 		if err := signRequest(req, b.creds, string(data)); err != nil {
-			return nil, err
-		}
-	}
-
-	if b.builderCreds != nil {
-		if err := signBuilderRequest(req, b.builderCreds, string(data)); err != nil {
 			return nil, err
 		}
 	}
